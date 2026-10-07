@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LaTeX Writer</title>
+  <link rel="stylesheet" href="/static/css/styles.css" />
+
+  <!--
+    Import map: remaps bare module specifiers (as used inside
+    js/editor.js and js/preview.js) to real ES module builds served
+    by esm.sh. There is deliberately no Node/npm build step in this
+    project, so this is the only way to use npm-published packages
+    straight in the browser.
+
+    Network requirement: the browser fetches these modules from
+    esm.sh over the network the first time the app loads on a given
+    machine. After that, the browser's HTTP cache (and, if the
+    service worker / cache storage is ever added, an explicit cache)
+    keeps it available offline. A fully air-gapped deployment would
+    need to vendor these files locally instead (see the note at the
+    top of js/app.js).
+
+    Versions are pinned to a major version only (e.g. "@6", "@4")
+    rather than an exact patch/minor, because esm.sh resolves that
+    to "latest compatible release" at fetch time -- this avoids
+    hard-coding a specific patch number that could not be verified
+    against the live npm registry in this offline authoring
+    environment. For a fully reproducible, pinned build, resolve
+    these to exact versions once a network-connected environment is
+    available and replace the ranges below.
+  -->
+  <script type="importmap">
+  {
+    "imports": {
+      "@codemirror/state": "https://esm.sh/@codemirror/state@6",
+      "@codemirror/view": "https://esm.sh/@codemirror/view@6",
+      "@codemirror/commands": "https://esm.sh/@codemirror/commands@6",
+      "@codemirror/language": "https://esm.sh/@codemirror/language@6",
+      "@codemirror/search": "https://esm.sh/@codemirror/search@6",
+      "@codemirror/legacy-modes": "https://esm.sh/@codemirror/legacy-modes@6",
+      "@codemirror/legacy-modes/mode/stex": "https://esm.sh/@codemirror/legacy-modes@6/mode/stex",
+      "pdfjs-dist": "https://esm.sh/pdfjs-dist@4"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="app-shell" id="app">
+
+    <!-- ─── Top bar ─── -->
+    <header class="topbar">
+      <span class="brand">LaTeX Writer</span>
+
+      <select id="project-select" aria-label="Select project">
+        <option value="">Loading projects…</option>
+      </select>
+      <button class="btn" id="btn-new-project" type="button">+ New Project</button>
+      <button class="btn btn-danger hidden" id="btn-delete-project" type="button">Delete Project</button>
+
+      <span class="spacer"></span>
+
+      <button class="btn btn-primary" id="btn-compile" type="button">Compile</button>
+      <button class="btn" id="btn-save-version" type="button">Save Version</button>
+      <button class="btn" id="btn-history" type="button">History</button>
+      <button class="btn" id="btn-packages" type="button">Packages</button>
+    </header>
+
+    <!-- ─── Main area: sidebar + split workspace ─── -->
+    <div class="layout">
+
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+          <span>Files</span>
+          <button class="btn btn-icon" id="btn-collapse-sidebar" type="button" title="Collapse sidebar">⟨⟨</button>
+        </div>
+        <div class="sidebar-toolbar">
+          <input id="new-file-input" type="text" placeholder="new/path/file.tex" />
+          <button class="btn btn-icon" id="btn-new-file" type="button" title="Create file">+</button>
+        </div>
+        <div id="file-tree">
+          <p class="empty-state">No project loaded yet.</p>
+        </div>
+      </aside>
+
+      <main class="workspace">
+        <section class="pane editor-pane" id="editor-pane">
+          <div class="pane-header">
+            <span class="pane-title" id="current-file-label">No file open</span>
+            <span id="save-status"></span>
+          </div>
+          <div id="editor-container"></div>
+        </section>
+
+        <div class="divider" id="pane-divider"></div>
+
+        <section class="pane preview-pane" id="preview-pane">
+          <div class="pane-header">
+            <span class="pane-title">Preview</span>
+            <span id="compile-status"></span>
+          </div>
+          <div id="preview-container">
+            <p class="preview-empty">Compile your document to see the PDF here.</p>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- ─── Slide-in panels ─── -->
+  <div class="panel-overlay" id="panel-overlay"></div>
+
+  <aside class="panel" id="history-panel" aria-label="Version history">
+    <div class="panel-header">
+      <h2>Version History</h2>
+      <button class="btn btn-icon" id="btn-close-history" type="button" title="Close">✕</button>
+    </div>
+    <div class="panel-body" id="history-panel-body">
+      <p class="empty-state">Open a project to see its history.</p>
+    </div>
+  </aside>
+
+  <aside class="panel" id="packages-panel" aria-label="Packages and templates">
+    <div class="panel-header">
+      <h2>Packages &amp; Templates</h2>
+      <button class="btn btn-icon" id="btn-close-packages" type="button" title="Close">✕</button>
+    </div>
+    <div class="panel-body" id="packages-panel-body"></div>
+  </aside>
+
+  <!-- ─── New project dialog ─── -->
+  <dialog id="new-project-dialog">
+    <form id="new-project-form">
+      <h2 style="margin-top:0;">New Project</h2>
+      <div class="form-row">
+        <label for="new-project-name">Project name</label>
+        <input id="new-project-name" type="text" required maxlength="120" placeholder="My Paper" />
+      </div>
+      <div class="form-row" style="margin-top: 0.75rem;">
+        <label for="new-project-template">Template</label>
+        <select id="new-project-template">
+          <option value="">Blank project</option>
+        </select>
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" type="button" id="btn-cancel-new-project">Cancel</button>
+        <button class="btn btn-primary" type="submit">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ─── Toasts ─── -->
+  <div id="toast-container" aria-live="polite"></div>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>

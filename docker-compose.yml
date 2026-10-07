@@ -1,0 +1,37 @@
+services:
+  # Renders LaTeX to PDF, serves the REST API, and owns every project's
+  # git-backed version history. Everything that touches the filesystem
+  # (workspace/, plugins/) lives in this container.
+  backend:
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    ports:
+      - "8001:8000" # optional: direct API access for debugging, bypassing the proxy
+    volumes:
+      - ./workspace:/app/workspace
+      - ./plugins:/app/plugins
+    environment:
+      WEBAPP_WORKSPACE_ROOT: /app/workspace
+      WEBAPP_PLUGINS_ROOT: /app/plugins
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # Thin static-file + reverse-proxy layer: serves the editor UI and
+  # forwards /api/* to the backend, so the browser only ever talks to
+  # one origin. This is the container users actually open in a browser.
+  webfront:
+    build:
+      context: .
+      dockerfile: ./webfront.Dockerfile
+    ports:
+      - "8000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

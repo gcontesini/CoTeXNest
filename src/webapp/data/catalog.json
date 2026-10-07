@@ -1,0 +1,125 @@
+[
+  {
+    "id": "handy-macros",
+    "name": "Handy Macros",
+    "description": "Lightweight in-house math shorthand macros (number sets, abs/norm, set-builder, partial derivatives). Written from scratch for this app, not a mirror of any CTAN package.",
+    "kind": "package",
+    "tags": [
+      "math",
+      "macros",
+      "in-house",
+      "not-ctan-mirror"
+    ],
+    "files": [
+      {
+        "name": "handy-macros.sty",
+        "content": "\\NeedsTeXFormat{LaTeX2e}\n\\ProvidesPackage{handy-macros}[2026/10/07 v1.0 Handy math shorthand macros]\n\n% In-house utility package (not a CTAN mirror). Provides a small set of\n% commonly used math shorthand macros written from first principles.\n\n\\RequirePackage{amsmath}\n\\RequirePackage{amssymb}\n\n% Common number sets.\n\\newcommand{\\RR}{\\mathbb{R}}\n\\newcommand{\\NN}{\\mathbb{N}}\n\\newcommand{\\ZZ}{\\mathbb{Z}}\n\\newcommand{\\QQ}{\\mathbb{Q}}\n\\newcommand{\\CC}{\\mathbb{C}}\n\n% Upright differential operator, e.g. \\int f(x) \\, \\dd x\n\\newcommand{\\dd}{\\mathrm{d}}\n\n% Absolute value and norm with auto-sized delimiters.\n\\newcommand{\\abs}[1]{\\left\\lvert #1 \\right\\rvert}\n\\newcommand{\\norm}[1]{\\left\\lVert #1 \\right\\rVert}\n\n% Set-builder notation, e.g. \\set{x \\in \\RR : x > 0}\n\\newcommand{\\set}[1]{\\left\\{ #1 \\right\\}}\n\n% Bold vector shorthand.\n\\newcommand{\\vect}[1]{\\boldsymbol{#1}}\n\n% Partial derivative, e.g. \\pd{f}{x}\n\\newcommand{\\pd}[2]{\\frac{\\partial #1}{\\partial #2}}\n\n\\endinput\n"
+      }
+    ]
+  },
+  {
+    "id": "code-listing-style",
+    "name": "Code Listing Style",
+    "description": "In-house preset style for the standard 'listings' package: line numbers, syntax color palette, and a framed layout. Written from scratch for this app, not a CTAN mirror.",
+    "kind": "package",
+    "tags": [
+      "code",
+      "listings",
+      "in-house",
+      "not-ctan-mirror"
+    ],
+    "files": [
+      {
+        "name": "code-listing-style.sty",
+        "content": "\\NeedsTeXFormat{LaTeX2e}\n\\ProvidesPackage{code-listing-style}[2026/10/07 v1.0 Preset code listing style]\n\n% In-house utility package (not a CTAN mirror). Wraps the standard\n% \"listings\" package with a single ready-to-use style preset.\n\n\\RequirePackage{listings}\n\\RequirePackage{xcolor}\n\n\\definecolor{codebg}{RGB}{245,245,245}\n\\definecolor{codekeyword}{RGB}{0,0,160}\n\\definecolor{codecomment}{RGB}{90,120,90}\n\\definecolor{codestring}{RGB}{160,30,30}\n\n\\lstdefinestyle{handystyle}{\n  backgroundcolor=\\color{codebg},\n  basicstyle=\\ttfamily\\small,\n  keywordstyle=\\color{codekeyword}\\bfseries,\n  commentstyle=\\color{codecomment}\\itshape,\n  stringstyle=\\color{codestring},\n  numbers=left,\n  numberstyle=\\tiny\\color{gray},\n  numbersep=8pt,\n  frame=single,\n  breaklines=true,\n  showstringspaces=false,\n  tabsize=2,\n  captionpos=b,\n}\n\n\\lstset{style=handystyle}\n\n\\endinput\n"
+      }
+    ]
+  },
+  {
+    "id": "simple-titlepage",
+    "name": "Simple Title Page",
+    "description": "In-house single-command custom title page builder using only the standard 'titlepage' environment. Written from scratch for this app, not a CTAN mirror.",
+    "kind": "package",
+    "tags": [
+      "titlepage",
+      "layout",
+      "in-house",
+      "not-ctan-mirror"
+    ],
+    "files": [
+      {
+        "name": "simple-titlepage.sty",
+        "content": "\\NeedsTeXFormat{LaTeX2e}\n\\ProvidesPackage{simple-titlepage}[2026/10/07 v1.0 Minimal custom title page]\n\n% In-house utility package (not a CTAN mirror). Defines one command,\n% \\simpletitlepage{title}{author}{date}, that typesets a clean title\n% page using only the \"titlepage\" environment already provided by the\n% standard article/report/book classes.\n\n\\newcommand{\\simpletitlepage}[3]{%\n  \\begin{titlepage}\n    \\centering\n    \\vspace*{3cm}\n    {\\Huge\\bfseries #1\\par}\n    \\vspace{1.5cm}\n    {\\Large #2\\par}\n    \\vspace{1cm}\n    {\\large #3\\par}\n    \\vfill\n    \\hrule height 0.5pt\n    \\vspace{0.3cm}\n    {\\small Prepared with the simple-titlepage package\\par}\n  \\end{titlepage}\n}\n\n\\endinput\n"
+      }
+    ]
+  },
+  {
+    "id": "quick-tables",
+    "name": "Quick Tables",
+    "description": "In-house table helpers layered on 'booktabs' and 'array': a bold-header shorthand and a fixed-width centered column type. Written from scratch for this app, not a CTAN mirror.",
+    "kind": "package",
+    "tags": [
+      "tables",
+      "booktabs",
+      "in-house",
+      "not-ctan-mirror"
+    ],
+    "files": [
+      {
+        "name": "quick-tables.sty",
+        "content": "\\NeedsTeXFormat{LaTeX2e}\n\\ProvidesPackage{quick-tables}[2026/10/07 v1.0 Booktabs-based table helpers]\n\n% In-house utility package (not a CTAN mirror). Adds a bold-header\n% shorthand and a fixed-width centered column type on top of the\n% standard \"booktabs\" and \"array\" packages.\n\n\\RequirePackage{booktabs}\n\\RequirePackage{array}\n\n% Bold header cell shorthand, e.g. \\head{Name}\n\\newcommand{\\head}[1]{\\textbf{#1}}\n\n% Centered, fixed-width column type, e.g. C{3cm}\n\\newcolumntype{C}[1]{>{\\centering\\arraybackslash}p{#1}}\n\n\\endinput\n"
+      }
+    ]
+  },
+  {
+    "id": "academic-paper",
+    "name": "Academic Paper",
+    "description": "Basic single-column academic paper starter using the standard 'article' class: title, author, abstract, and a conventional section outline (Introduction through Conclusion).",
+    "kind": "template",
+    "tags": [
+      "article",
+      "paper",
+      "academic"
+    ],
+    "files": [
+      {
+        "name": "main.tex",
+        "content": "\\documentclass[11pt]{article}\n\n\\usepackage[margin=1in]{geometry}\n\\usepackage{amsmath}\n\\usepackage{amssymb}\n\\usepackage{graphicx}\n\n\\title{Your Paper Title Here}\n\\author{Author One \\\\ Department, Institution \\\\ \\texttt{author@example.edu}}\n\\date{\\today}\n\n\\begin{document}\n\n\\maketitle\n\n\\begin{abstract}\nWrite a concise summary of the paper's motivation, methods, and\nprincipal findings here.\n\\end{abstract}\n\n\\section{Introduction}\nIntroduce the problem, its significance, and the contribution of this\nwork.\n\n\\section{Related Work}\nSummarize prior work and situate the present contribution within it.\n\n\\section{Methods}\nDescribe the methodology in sufficient detail for reproducibility.\n\n\\section{Results}\nPresent the findings, referring to figures and tables as needed.\n\n\\section{Discussion}\nInterpret the results and discuss limitations.\n\n\\section{Conclusion}\nSummarize the contribution and outline future work.\n\n% \\bibliographystyle{plain}\n% \\bibliography{references}\n\n\\end{document}\n"
+      }
+    ]
+  },
+  {
+    "id": "two-column-resume",
+    "name": "Two-Column Resume",
+    "description": "Simple two-column resume/CV starter built with 'multicol', 'titlesec', and 'enumitem': header contact block plus Experience/Education/Skills/Projects/Certifications sections.",
+    "kind": "template",
+    "tags": [
+      "resume",
+      "cv",
+      "two-column"
+    ],
+    "files": [
+      {
+        "name": "main.tex",
+        "content": "\\documentclass[10pt,a4paper]{article}\n\n\\usepackage[margin=0.6in]{geometry}\n\\usepackage{multicol}\n\\usepackage{enumitem}\n\\usepackage{titlesec}\n\n\\titleformat{\\section}{\\large\\bfseries\\scshape}{}{0em}{}[\\titlerule]\n\\titlespacing{\\section}{0pt}{8pt}{4pt}\n\n\\pagestyle{empty}\n\n\\begin{document}\n\n\\begin{center}\n  {\\LARGE\\bfseries Your Name}\\\\[2pt]\n  City, Country \\quad $\\cdot$ \\quad email@example.com \\quad $\\cdot$ \\quad\n  +1 (555) 555-5555\n\\end{center}\n\n\\section*{Summary}\nA brief, two- to three-sentence professional summary highlighting your\nbackground and core strengths.\n\n\\begin{multicols}{2}\n\n\\section*{Experience}\n\\textbf{Job Title} \\hfill \\textit{20XX -- Present}\\\\\nCompany Name, City\\\\\n\\begin{itemize}[leftmargin=*, noitemsep]\n  \\item Describe a key responsibility or achievement.\n  \\item Describe another achievement with a measurable result.\n\\end{itemize}\n\n\\textbf{Previous Job Title} \\hfill \\textit{20XX -- 20XX}\\\\\nPrevious Company, City\\\\\n\\begin{itemize}[leftmargin=*, noitemsep]\n  \\item Describe a key responsibility or achievement.\n\\end{itemize}\n\n\\section*{Education}\n\\textbf{Degree, Institution} \\hfill \\textit{20XX}\\\\\nRelevant coursework or honors.\n\n\\columnbreak\n\n\\section*{Skills}\n\\begin{itemize}[leftmargin=*, noitemsep]\n  \\item Skill category: specific tools or languages.\n  \\item Skill category: specific tools or languages.\n\\end{itemize}\n\n\\section*{Projects}\n\\textbf{Project Name} \\hfill \\textit{20XX}\\\\\nOne or two lines describing the project and its outcome.\n\n\\section*{Certifications}\n\\begin{itemize}[leftmargin=*, noitemsep]\n  \\item Certification name, issuing body, year.\n\\end{itemize}\n\n\\end{multicols}\n\n\\end{document}\n"
+      }
+    ]
+  },
+  {
+    "id": "beamer-starter",
+    "name": "Beamer Presentation Starter",
+    "description": "Minimal Beamer presentation starter with the built-in 'Madrid' theme: a title slide, an outline slide, and one content slide to build from.",
+    "kind": "template",
+    "tags": [
+      "beamer",
+      "presentation",
+      "slides"
+    ],
+    "files": [
+      {
+        "name": "main.tex",
+        "content": "\\documentclass{beamer}\n\n\\usetheme{Madrid}\n\n\\title{Presentation Title}\n\\subtitle{Optional Subtitle}\n\\author{Your Name}\n\\institute{Your Institution}\n\\date{\\today}\n\n\\begin{document}\n\n\\begin{frame}\n  \\titlepage\n\\end{frame}\n\n\\begin{frame}{Outline}\n  \\tableofcontents\n\\end{frame}\n\n\\section{Introduction}\n\n\\begin{frame}{First Content Slide}\n  \\begin{itemize}\n    \\item First key point.\n    \\item Second key point.\n    \\item Third key point, with a brief explanation.\n  \\end{itemize}\n\\end{frame}\n\n\\end{document}\n"
+      }
+    ]
+  }
+]
