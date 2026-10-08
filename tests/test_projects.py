@@ -11,11 +11,12 @@ import json
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from webapp import config
 from webapp.routers import projects
+from webapp.services import project_files
 
 _FAKE_CATALOG = [
     {
@@ -203,17 +204,15 @@ def test_resolve_safe_path_rejects_traversal_directly(
     project_root = tmp_path / "proj"
     project_root.mkdir()
 
-    with pytest.raises(HTTPException) as exc_info:
-        projects._resolve_safe_path(project_root, "../../etc/passwd")
-
-    assert exc_info.value.status_code == 400
+    with pytest.raises(ValueError):
+        project_files.resolve_safe_path(project_root, "../../etc/passwd")
 
 
 def test_resolve_safe_path_allows_root_itself(tmp_path: Path) -> None:
     project_root = tmp_path / "proj"
     project_root.mkdir()
 
-    resolved = projects._resolve_safe_path(project_root, ".")
+    resolved = project_files.resolve_safe_path(project_root, ".")
     assert resolved == project_root.resolve()
 
 

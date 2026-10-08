@@ -1,7 +1,7 @@
 services:
   # Renders LaTeX to PDF, serves the REST API, and owns every project's
   # git-backed version history. Everything that touches the filesystem
-  # (workspace/, plugins/) lives in this container.
+  # (workspace/, plugins/, assistant_config/) lives in this container.
   backend:
     build:
       context: .
@@ -11,9 +11,14 @@ services:
     volumes:
       - ./workspace:/app/workspace
       - ./plugins:/app/plugins
+      - ./assistant_config:/app/assistant_config
     environment:
       WEBAPP_WORKSPACE_ROOT: /app/workspace
       WEBAPP_PLUGINS_ROOT: /app/plugins
+      WEBAPP_ASSISTANT_CONFIG_ROOT: /app/assistant_config
+      WEBAPP_OLLAMA_BASE_URL: http://ai-assistant:11434
+    depends_on:
+      - ai-assistant
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
@@ -21,6 +26,25 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # Local LLM backend for the AI writing assistant (see
+  # docs/ai-assistant.md). Deliberately the stock image with no custom
+  # Dockerfile: model weights are pulled lazily, on first use, by
+  # `backend` calling Ollama's own /api/pull -- so this image never
+  # needs rebuilding just because the configured model changes.
+  #
+  # Model weights live in a named volume, not a bind mount like
+  # workspace/plugins/assistant_config: they're multi-gigabyte binary
+  # caches re-downloadable from Ollama's registry, not human-authored
+  # content or editable configuration, so there's nothing gained by
+  # making them inspectable on the host the way the rest of this
+  # project's state is (see "Every piece of state lives in a
+  # bind-mounted volume" in docs/architecture.md).
+  ai-assistant:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama-models:/root/.ollama
+    restart: unless-stopped
 
   # Thin static-file + reverse-proxy layer: serves the editor UI and
   # forwards /api/* to the backend, so the browser only ever talks to
@@ -35,3 +59,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  ollama-models:

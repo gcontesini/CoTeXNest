@@ -125,7 +125,7 @@ class PackageAddLocalRequest(BaseModel):
     content: str
 
 
-# ─── AI assist ───
+# ─── AI assistant ───
 
 
 class AiModelOption(BaseModel):
@@ -133,12 +133,82 @@ class AiModelOption(BaseModel):
     label: str
 
 
-class AiAssistRequest(BaseModel):
-    model: str
-    log: str
+class AssistantProposal(BaseModel):
+    """One proposed file change the assistant wants to make.
+
+    Never applied automatically -- the frontend shows it to the user
+    (as a diff/description) and only ``POST .../assistant/apply``
+    actually touches disk, which also commits the result to the
+    project's git history so it's always recoverable.
+    """
+
+    id: str
+    action: str  # "write_file" | "create_entry" | "delete_entry" | "rename_entry"
+    path: str
+    new_path: str | None = None
+    entry_type: str | None = None  # "file" | "dir", for create_entry only
+    content: str | None = None  # full new content, for write_file/create_entry
+    description: str
+
+
+class AssistantProviderConfig(BaseModel):
+    provider: str = "local"  # "local" | "external"
+    local_model: str = "llama3.2:1b"
+    external_provider_kind: str = "anthropic"  # "anthropic" | "openai"
+    external_base_url: str | None = None
+    external_model: str | None = None
+    has_external_api_key: bool = False
+    writing_style_profile: str | None = None
+
+
+class AssistantConfigUpdate(BaseModel):
+    provider: str | None = None
+    local_model: str | None = None
+    external_provider_kind: str | None = None
+    external_base_url: str | None = None
+    external_model: str | None = None
+    external_api_key: str | None = None
+    clear_external_api_key: bool = False
+
+
+class AssistantChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class AssistantChatRequest(BaseModel):
+    messages: list[AssistantChatMessage] = Field(min_length=1)
     main_file: str | None = None
 
 
+class AssistantChatResult(BaseModel):
+    reply: str
+    proposals: list[AssistantProposal] = Field(default_factory=list)
+
+
+class AssistantApplyRequest(BaseModel):
+    proposal: AssistantProposal
+    author: str = "AI assistant"
+
+
+class AssistantApplyResult(BaseModel):
+    success: bool
+    commit_id: str
+
+
+class WritingStyleSampleRequest(BaseModel):
+    samples: list[str] = Field(min_length=1)
+
+
+class WritingStyleResult(BaseModel):
+    profile: str
+
+
+class AiAssistRequest(BaseModel):
+    log: str
+    main_file: str
+
+
 class AiAssistResult(BaseModel):
-    model: str
     suggestion: str
+    proposal: AssistantProposal | None = None

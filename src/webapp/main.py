@@ -16,8 +16,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
+from .routers import assistant, history, packages, projects
 from .routers import compile as compile_router
-from .routers import history, packages, projects
 
 _STATIC_DIR: Path = Path(__file__).resolve().parent / "static"
 
@@ -56,6 +56,7 @@ app.include_router(projects.router)
 app.include_router(compile_router.router)
 app.include_router(history.router)
 app.include_router(packages.router)
+app.include_router(assistant.router)
 
 
 @app.get("/healthz")

@@ -9,3 +9,16 @@ __pycache__/
 /plugins/*
 !/plugins/.gitkeep
 !/plugins/manifest.json
+
+/assistant_config/*
+!/assistant_config/.gitkeep
+
+.remember/
+.claude/
+.ruff_cache/
+
+.pending_tasks
+.resume
+.coverage
+
+/docs/_build/

@@ -48,6 +48,32 @@
 <body>
   <div class="app-shell" id="app">
 
+    <!-- ─── Menu bar ─── -->
+    <nav class="menubar" aria-label="Main menu">
+      <div class="menubar-item">
+        <button class="menubar-trigger" id="menu-file-trigger" type="button" aria-haspopup="true" aria-expanded="false">File</button>
+        <ul class="menubar-dropdown hidden" id="menu-file-dropdown" role="menu">
+          <li role="none"><button class="menubar-dropdown-item" id="menu-new-project" type="button" role="menuitem">New Project</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-new-project-from-sample" type="button" role="menuitem">New Project from Sample</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-open-project" type="button" role="menuitem">Open Project</button></li>
+          <li class="menubar-separator" role="separator"></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-save" type="button" role="menuitem">Save</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-save-as" type="button" role="menuitem">Save As…</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-export-pdf" type="button" role="menuitem">Export PDF</button></li>
+          <li class="menubar-separator" role="separator"></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-close-project" type="button" role="menuitem">Close Project</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-quit" type="button" role="menuitem">Quit</button></li>
+        </ul>
+      </div>
+      <div class="menubar-item">
+        <button class="menubar-trigger" id="menu-help-trigger" type="button" aria-haspopup="true" aria-expanded="false">Help</button>
+        <ul class="menubar-dropdown hidden" id="menu-help-dropdown" role="menu">
+          <li role="none"><button class="menubar-dropdown-item" id="menu-help-docs" type="button" role="menuitem">Documentation</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-help-templates" type="button" role="menuitem">Template Examples</button></li>
+        </ul>
+      </div>
+    </nav>
+
     <!-- ─── Top bar ─── -->
     <header class="topbar">
       <span class="brand">LaTeX Writer</span>
@@ -64,6 +90,7 @@
       <button class="btn" id="btn-save-version" type="button">Save Version</button>
       <button class="btn" id="btn-history" type="button">History</button>
       <button class="btn" id="btn-packages" type="button">Packages</button>
+      <button class="btn" id="btn-assistant" type="button">Assistant</button>
     </header>
 
     <!-- ─── Main area: sidebar + split workspace ─── -->
@@ -75,8 +102,11 @@
           <button class="btn btn-icon" id="btn-collapse-sidebar" type="button" title="Collapse sidebar">⟨⟨</button>
         </div>
         <div class="sidebar-toolbar">
-          <input id="new-file-input" type="text" placeholder="new/path/file.tex" />
-          <button class="btn btn-icon" id="btn-new-file" type="button" title="Create file">+</button>
+          <input id="file-search" type="text" placeholder="Search files…" aria-label="Search files" />
+        </div>
+        <div class="sidebar-toolbar">
+          <button class="btn btn-icon" id="btn-new-file-root" type="button" title="New file">📄+</button>
+          <button class="btn btn-icon" id="btn-new-folder-root" type="button" title="New folder">📁+</button>
         </div>
         <div id="file-tree">
           <p class="empty-state">No project loaded yet.</p>
@@ -105,6 +135,40 @@
         </section>
       </main>
     </div>
+
+    <!-- ─── AI assistant panel (bottom dock) ─── -->
+    <section class="assistant-dock hidden" id="assistant-dock" aria-label="AI assistant">
+      <div class="assistant-dock-header">
+        <div class="assistant-tabs">
+          <button class="assistant-tab active" id="tab-assistant-chat" type="button">Chat</button>
+          <button class="assistant-tab" id="tab-assistant-settings" type="button">Settings</button>
+        </div>
+        <button class="btn btn-icon" id="btn-close-assistant" type="button" title="Close">✕</button>
+      </div>
+
+      <div class="assistant-panel-body" id="assistant-chat-view">
+        <div class="assistant-chat-log" id="assistant-chat-log">
+          <p class="empty-state">
+            Ask the assistant for help with your LaTeX. It will never
+            change a file on its own -- every suggestion appears here
+            first, for you to accept or reject.
+          </p>
+        </div>
+        <form class="assistant-chat-form" id="assistant-chat-form">
+          <textarea id="assistant-chat-input" placeholder="Ask the assistant…" rows="2"></textarea>
+          <button class="btn btn-primary" type="submit">Send</button>
+        </form>
+      </div>
+
+      <div class="assistant-panel-body hidden" id="assistant-settings-view"></div>
+    </section>
+
+    <!-- ─── Status bar ─── -->
+    <footer class="statusbar" id="statusbar">
+      <span id="status-char-count">0 characters</span>
+      <span id="status-word-count">0 words</span>
+      <span id="status-line-count">0 lines</span>
+    </footer>
   </div>
 
   <!-- ─── Slide-in panels ─── -->
@@ -147,6 +211,44 @@
         <button class="btn btn-primary" type="submit">Create</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- ─── Delete project dialog ─── -->
+  <dialog id="delete-project-dialog">
+    <form id="delete-project-form">
+      <h2 style="margin-top:0;">Delete Project</h2>
+      <p>
+        This will permanently delete
+        <strong id="delete-project-name"></strong>
+        and all of its files. This cannot be undone.
+      </p>
+      <div class="form-row">
+        <label for="delete-project-confirm-input">
+          Type the project name to confirm
+        </label>
+        <input id="delete-project-confirm-input" type="text" autocomplete="off" />
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" type="button" id="btn-cancel-delete-project">Cancel</button>
+        <button class="btn btn-danger" type="submit" id="btn-confirm-delete-project" disabled>Delete this project</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ─── Quit dialog ─── -->
+  <dialog id="quit-dialog">
+    <h2 style="margin-top:0;">Quit LaTeX Writer</h2>
+    <p>
+      This is a locally-hosted web app running in your browser, so there is
+      no in-browser action that can stop the server for you. To fully shut
+      it down, run <code>just down</code> (or <code>docker compose down</code>)
+      in your terminal from the project directory. You can safely close
+      this browser tab now — the server keeps running in the background
+      until you do.
+    </p>
+    <div class="dialog-actions">
+      <button class="btn btn-primary" type="button" id="btn-close-quit-dialog">Got it</button>
+    </div>
   </dialog>
 
   <!-- ─── Toasts ─── -->

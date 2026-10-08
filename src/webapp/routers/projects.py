@@ -11,7 +11,6 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
-import os
 import re
 import secrets
 import shutil
@@ -32,6 +31,7 @@ from webapp.models import (
     ProjectCreate,
     ProjectSummary,
 )
+from webapp.services import project_files
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +48,6 @@ _DEFAULT_MAIN_TEX = (
     "Hello, world!\n"
     "\\end{document}\n"
 )
-
-_HIDDEN_TREE_ENTRIES = {".git", _PROJECT_METADATA_FILENAME}
 
 
 # ─── Internal helpers ───
@@ -137,94 +135,6 @@ def _write_project_metadata(
     )
 
 
-def _get_existing_project_dir(project_id: str) -> Path:
-    """Resolve a project id to its directory, validating it exists.
-
-    Args:
-        project_id: Project identifier from the URL path.
-
-    Returns:
-        The resolved, existing project directory.
-
-    Raises:
-        HTTPException: 400 on path traversal attempts, 404 if the
-            project does not exist.
-    """
-    try:
-        project_root = config.project_dir(project_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    if not project_root.is_dir():
-        raise HTTPException(status_code=404, detail="project not found")
-
-    return project_root
-
-
-def _resolve_safe_path(project_root: Path, relative_path: str) -> Path:
-    """Resolve a file path within a project, rejecting path traversal.
-
-    Args:
-        project_root: Resolved root directory of the project.
-        relative_path: Path relative to ``project_root``, as received
-            from the URL (may contain ``..`` from a malicious client).
-
-    Returns:
-        The resolved, absolute path, guaranteed to lie inside
-        ``project_root``.
-
-    Raises:
-        HTTPException: 400 if the resolved path escapes the project
-            directory.
-    """
-    project_root_resolved = project_root.resolve()
-    candidate = (project_root_resolved / relative_path).resolve()
-
-    is_inside = candidate == project_root_resolved or str(
-        candidate
-    ).startswith(str(project_root_resolved) + os.sep)
-
-    if not is_inside:
-        raise HTTPException(status_code=400, detail="invalid path")
-
-    return candidate
-
-
-def _build_file_tree(directory: Path, project_root: Path) -> FileNode:
-    """Recursively build a FileNode tree for a directory.
-
-    Args:
-        directory: Directory to describe (project_root on the initial
-            call, a subdirectory on recursive calls).
-        project_root: Resolved project root, used to compute relative
-            paths for every node.
-
-    Returns:
-        A FileNode of type "dir" with one child per visible entry,
-        directories before files, skipping ``.git`` and the
-        ``.project.json`` metadata sidecar.
-    """
-    relative = directory.relative_to(project_root)
-    node_path = "" if relative == Path(".") else relative.as_posix()
-
-    entries = sorted(
-        directory.iterdir(), key=lambda entry: (entry.is_file(), entry.name)
-    )
-
-    children: list[FileNode] = []
-    for entry in entries:
-        if entry.name in _HIDDEN_TREE_ENTRIES:
-            continue
-
-        if entry.is_dir():
-            children.append(_build_file_tree(entry, project_root))
-        else:
-            entry_path = entry.relative_to(project_root).as_posix()
-            children.append(FileNode(path=entry_path, type="file"))
-
-    return FileNode(path=node_path, type="dir", children=children)
-
-
 def _apply_template(project_root: Path, template_id: str) -> bool:
     """Populate a new project directory from a catalog template.
 
@@ -268,8 +178,8 @@ def _apply_template(project_root: Path, template_id: str) -> bool:
             continue
 
         try:
-            target = _resolve_safe_path(project_root, file_name)
-        except HTTPException:
+            target = project_files.resolve_safe_path(project_root, file_name)
+        except ValueError:
             logger.warning(
                 "template %s file escapes project root: %s",
                 template_id,
@@ -411,7 +321,13 @@ def delete_project(project_id: str) -> dict[str, bool]:
         HTTPException: 400 on path traversal attempts, 404 if the
             project does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
+    try:
+        project_root = project_files.get_project_dir(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     shutil.rmtree(project_root)
     return {"success": True}
 
@@ -439,27 +355,12 @@ def create_entry(project_id: str, payload: FileCreateRequest) -> FileNode:
             if something already exists at that path; 404 if the
             project does not exist.
     """
-    if payload.type not in ("file", "dir"):
-        raise HTTPException(
-            status_code=400, detail='type must be "file" or "dir"'
-        )
-
-    project_root = _get_existing_project_dir(project_id)
-    target = _resolve_safe_path(project_root, payload.path)
-
-    if target.exists():
-        raise HTTPException(
-            status_code=400,
-            detail=f"a file or directory already exists at {payload.path!r}",
-        )
-
-    if payload.type == "dir":
-        target.mkdir(parents=True, exist_ok=False)
-    else:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.touch(exist_ok=False)
-
-    return FileNode(path=payload.path, type=payload.type)
+    try:
+        return project_files.create_entry(project_id, payload.path, payload.type)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{project_id}/files", response_model=FileNode)
@@ -477,8 +378,12 @@ def get_file_tree(project_id: str) -> FileNode:
         HTTPException: 400 on path traversal attempts, 404 if the
             project does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    return _build_file_tree(project_root, project_root)
+    try:
+        return project_files.get_file_tree(project_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/{project_id}/files/{file_path:path}/raw")
@@ -513,8 +418,13 @@ def read_file_raw(project_id: str, file_path: str) -> FileResponse:
         HTTPException: 400 on path traversal attempts, 404 if the
             project or file does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    target = _resolve_safe_path(project_root, file_path)
+    try:
+        project_root = project_files.get_project_dir(project_id)
+        target = project_files.resolve_safe_path(project_root, file_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail="file not found")
@@ -549,8 +459,13 @@ async def upload_file(
         HTTPException: 400 on path traversal attempts, 404 if the
             project does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    target = _resolve_safe_path(project_root, file_path)
+    try:
+        project_root = project_files.get_project_dir(project_id)
+        target = project_files.resolve_safe_path(project_root, file_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     target.parent.mkdir(parents=True, exist_ok=True)
     contents = await file.read()
@@ -578,18 +493,12 @@ def read_file(project_id: str, file_path: str) -> FileContent:
         HTTPException: 400 on path traversal or non-UTF-8 content,
             404 if the project or file does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    target = _resolve_safe_path(project_root, file_path)
-
-    if not target.is_file():
-        raise HTTPException(status_code=404, detail="file not found")
-
     try:
-        content = target.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(
-            status_code=400, detail="file is not valid UTF-8 text"
-        ) from exc
+        content = project_files.read_file(project_id, file_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return FileContent(path=file_path, content=content)
 
@@ -613,11 +522,12 @@ def write_file(
         HTTPException: 400 on path traversal attempts, 404 if the
             project does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    target = _resolve_safe_path(project_root, file_path)
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(payload.content, encoding="utf-8")
+    try:
+        project_files.write_file(project_id, file_path, payload.content)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return FileContent(path=file_path, content=payload.content)
 
@@ -638,16 +548,12 @@ def delete_file(project_id: str, file_path: str) -> dict[str, bool]:
         HTTPException: 400 on path traversal attempts, 404 if the
             project or the project does not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    target = _resolve_safe_path(project_root, file_path)
-
-    if not target.exists():
-        raise HTTPException(status_code=404, detail="file not found")
-
-    if target.is_dir():
-        shutil.rmtree(target)
-    else:
-        target.unlink()
+    try:
+        project_files.delete_entry(project_id, file_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return {"success": True}
 
@@ -675,23 +581,9 @@ def rename_file(
             already exists at the destination, 404 if the source does
             not exist.
     """
-    project_root = _get_existing_project_dir(project_id)
-    source = _resolve_safe_path(project_root, file_path)
-
-    if not source.exists():
-        raise HTTPException(status_code=404, detail="file not found")
-
-    destination = _resolve_safe_path(project_root, payload.new_path)
-
-    if destination.exists():
-        raise HTTPException(
-            status_code=400,
-            detail=f"something already exists at {payload.new_path!r}",
-        )
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    source.rename(destination)
-
-    return FileNode(
-        path=payload.new_path, type="dir" if destination.is_dir() else "file"
-    )
+    try:
+        return project_files.rename_entry(project_id, file_path, payload.new_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

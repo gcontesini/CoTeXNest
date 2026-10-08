@@ -37,14 +37,28 @@ DEFAULT_MAIN_FILE: str = "main.tex"
 # Wall-clock timeout (seconds) for a single LaTeX compile invocation.
 COMPILE_TIMEOUT_SECONDS: int = int(os.environ.get("WEBAPP_COMPILE_TIMEOUT", "60"))
 
-# Anthropic API key for the optional "AI console" (ai_assist.py). Unset by
-# default: the AI endpoints return a clear error rather than failing with
-# an opaque auth exception when this isn't configured. Never hard-code a
-# real key here -- it is supplied at deploy time via the environment (see
-# docker-compose.yml) and is never committed or baked into an image.
-ANTHROPIC_API_KEY: str | None = os.environ.get("ANTHROPIC_API_KEY")
+# Per-user AI assistant configuration (provider choice, model, external
+# API key, writing-style profile) -- see services/assistant.py. A bind
+# mount in Docker, the same way WORKSPACE_ROOT/PLUGINS_ROOT are, so it
+# survives a container rebuild and is inspectable without the app running.
+ASSISTANT_CONFIG_ROOT: Path = Path(
+    os.environ.get(
+        "WEBAPP_ASSISTANT_CONFIG_ROOT", str(BASE_DIR / "assistant_config")
+    )
+)
+ASSISTANT_CONFIG_PATH: Path = ASSISTANT_CONFIG_ROOT / "settings.json"
 
-# Wall-clock timeout (seconds) for a single AI-assist request.
+# Base URL of the local Ollama server the AI assistant talks to when its
+# provider is "local". Defaults to Ollama's own default port on
+# localhost for "just dev"; docker-compose.yml overrides this to the
+# "ai-assistant" service's container-network address.
+OLLAMA_BASE_URL: str = os.environ.get(
+    "WEBAPP_OLLAMA_BASE_URL", "http://localhost:11434"
+)
+
+# Wall-clock timeout (seconds) for a single AI-assist request (chat,
+# suggestion, compile-error fix, or writing-style synthesis). Ollama
+# model pulls use their own, much longer timeout -- see assistant.py.
 AI_ASSIST_TIMEOUT_SECONDS: int = int(os.environ.get("WEBAPP_AI_TIMEOUT", "60"))
 
 
@@ -55,6 +69,7 @@ def ensure_dirs() -> None:
     """
     WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
     PLUGINS_ROOT.mkdir(parents=True, exist_ok=True)
+    ASSISTANT_CONFIG_ROOT.mkdir(parents=True, exist_ok=True)
 
 
 def project_dir(project_id: str) -> Path:

@@ -9,14 +9,17 @@ dependencies = [
   "pydantic>=2",
   "gitpython",
   "python-multipart",
+  "httpx",
 ]
 
 [dependency-groups]
 dev = [
   "pytest",
-  "httpx",
   "pytest-cov",
   "ruff",
+  "sphinx",
+  "myst-parser",
+  "furo",
 ]
 
 [tool.pytest.ini_options]

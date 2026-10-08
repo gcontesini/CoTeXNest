@@ -63,8 +63,13 @@ export function clearPreview(container) {
  *
  * @param {Element} container - Preview pane element to render into.
  * @param {string} logText - Raw compiler log/output text.
+ * @param {object} [options]
+ * @param {(logText: string) => void} [options.onAskAssistant] - When
+ *   given, shows an "Ask the assistant to fix this" button that calls
+ *   back with the same log text. Omitted for errors that aren't an
+ *   actual compile log (e.g. a network-level request failure).
  */
-export function showCompileError(container, logText) {
+export function showCompileError(container, logText, { onAskAssistant } = {}) {
   assertContainer(container, "showCompileError");
 
   clearPreview(container);
@@ -83,6 +88,21 @@ export function showCompileError(container, logText) {
 
   errorBlock.appendChild(heading);
   errorBlock.appendChild(logBlock);
+
+  if (onAskAssistant) {
+    const actions = document.createElement("div");
+    actions.className = "preview-error-actions";
+
+    const askButton = document.createElement("button");
+    askButton.type = "button";
+    askButton.className = "btn btn-primary";
+    askButton.textContent = "Ask the assistant to fix this";
+    askButton.addEventListener("click", () => onAskAssistant(logText));
+
+    actions.appendChild(askButton);
+    errorBlock.appendChild(actions);
+  }
+
   container.appendChild(errorBlock);
 }
 

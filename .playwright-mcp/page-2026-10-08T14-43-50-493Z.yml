@@ -1,0 +1,74 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - navigation "Main menu" [ref=e3]:
+      - button "File" [ref=e5] [cursor=pointer]
+      - button "Help" [ref=e7] [cursor=pointer]
+    - banner [ref=e8]:
+      - generic [ref=e9]: LaTeX Writer
+      - combobox "Select project" [ref=e10]:
+        - option "AssistantUiTest" [selected]
+        - option "Test_latex_project"
+      - button "+ New Project" [ref=e11] [cursor=pointer]
+      - button "Delete Project" [ref=e12] [cursor=pointer]
+      - button "Compile" [ref=e13] [cursor=pointer]
+      - button "Save Version" [ref=e14] [cursor=pointer]
+      - button "History" [ref=e15] [cursor=pointer]
+      - button "Packages" [ref=e16] [cursor=pointer]
+      - button "Assistant" [ref=e17] [cursor=pointer]
+    - generic [ref=e18]:
+      - complementary [ref=e19]:
+        - generic [ref=e20]:
+          - generic [ref=e21]: Files
+          - button "⟨⟨" [ref=e22] [cursor=pointer]
+        - textbox "Search files" [ref=e24]:
+          - /placeholder: Search files…
+        - generic [ref=e25]:
+          - button "📄+" [ref=e26] [cursor=pointer]
+          - button "📁+" [ref=e27] [cursor=pointer]
+        - list [ref=e93]:
+          - listitem [ref=e94]:
+            - generic [ref=e95] [cursor=pointer]:
+              - generic [ref=e96]: 📄
+              - generic [ref=e97]: main.aux
+              - button "⋮" [ref=e98]
+          - listitem [ref=e99]:
+            - generic [ref=e100] [cursor=pointer]:
+              - generic [ref=e101]: 📄
+              - generic [ref=e102]: main.fdb_latexmk
+              - button "⋮" [ref=e103]
+          - listitem [ref=e104]:
+            - generic [ref=e105] [cursor=pointer]:
+              - generic [ref=e106]: 📄
+              - generic [ref=e107]: main.fls
+              - button "⋮" [ref=e108]
+          - listitem [ref=e109]:
+            - generic [ref=e110] [cursor=pointer]:
+              - generic [ref=e111]: 📄
+              - generic [ref=e112]: main.log
+              - button "⋮" [ref=e113]
+          - listitem [ref=e114]:
+            - generic [ref=e115] [cursor=pointer]:
+              - generic [ref=e116]: 📄
+              - generic [ref=e117]: main.pdf
+              - button "⋮" [ref=e118]
+          - listitem [ref=e119]:
+            - generic [ref=e120] [cursor=pointer]:
+              - generic [ref=e121]: 📄
+              - generic [ref=e122]: main.tex
+              - button "⋮" [ref=e123]
+      - main [ref=e60]:
+        - generic [ref=e61]: No file open
+        - generic [ref=e73]: Preview
+    - contentinfo [ref=e78]:
+      - generic [ref=e79]: 0 characters
+      - generic [ref=e80]: 0 words
+      - generic [ref=e81]: 0 lines
+  - complementary "Version history" [ref=e82]:
+    - generic [ref=e83]:
+      - heading "Version History" [level=2] [ref=e84]
+      - button "✕" [ref=e85] [cursor=pointer]
+    - paragraph [ref=e87]: Open a project to see its history.
+  - complementary "Packages and templates" [ref=e88]:
+    - generic [ref=e89]:
+      - heading "Packages & Templates" [level=2] [ref=e90]
+      - button "✕" [ref=e91] [cursor=pointer]

@@ -32,4 +32,6 @@ for direct API debugging. See `docs/architecture.md`.
 
 See `docs/` for architecture notes, the API contract
 (`src/webapp/models.py`, `src/webapp/config.py`), and the package
-catalog format.
+catalog format. These same Markdown files also build as a Sphinx site
+(`just docs-build`, output in `docs/_build/html/`), published to
+GitHub Pages on every push to `main` -- see `docs/index.md`.

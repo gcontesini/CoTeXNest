@@ -1,0 +1,4 @@
+[    8061ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:8123/:0
+[   11720ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ http://127.0.0.1:8123/:0
+[   34355ms] [ERROR] Failed to load resource: the server responded with a status of 400 (Bad Request) @ http://127.0.0.1:8123/api/projects/assistantuitest-528649/files/main.pdf:0
+[   34356ms] [ERROR] [latex-writer] Could not open "main.pdf": GET /api/projects/assistantuitest-528649/files/main.pdf failed with status 400 Bad Request: {"detail":"file is not valid UTF-8 text"} @ http://127.0.0.1:8123/static/js/app.js:158

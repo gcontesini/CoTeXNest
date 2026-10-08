@@ -133,6 +133,22 @@ export async function deleteFile(projectId, path) {
   );
 }
 
+export async function createEntry(projectId, path, type) {
+  return request(
+    "POST",
+    `/api/projects/${encodeURIComponent(projectId)}/files`,
+    { path, type },
+  );
+}
+
+export async function renameEntry(projectId, path, newPath) {
+  return request(
+    "PATCH",
+    `/api/projects/${encodeURIComponent(projectId)}/files/${encodeFilePath(path)}`,
+    { new_path: newPath },
+  );
+}
+
 // ─── Compilation ───
 
 export async function compile(projectId, mainFile) {
@@ -218,5 +234,55 @@ export async function removePackage(packageId) {
   return request(
     "DELETE",
     `/api/packages/${encodeURIComponent(packageId)}`,
+  );
+}
+
+// ─── AI assistant ───
+
+export async function getAssistantConfig() {
+  return request("GET", "/api/assistant/config");
+}
+
+export async function updateAssistantConfig(update) {
+  return request("PUT", "/api/assistant/config", update);
+}
+
+export async function listAssistantModels() {
+  return request("GET", "/api/assistant/models");
+}
+
+export async function learnWritingStyle(samples) {
+  return request("POST", "/api/assistant/writing-style", { samples });
+}
+
+export async function assistantChat(projectId, messages, mainFile) {
+  return request(
+    "POST",
+    `/api/projects/${encodeURIComponent(projectId)}/assistant/chat`,
+    { messages, main_file: mainFile ?? null },
+  );
+}
+
+export async function assistantSuggest(projectId, mainFile) {
+  return request(
+    "POST",
+    `/api/projects/${encodeURIComponent(projectId)}/assistant/suggest` +
+      `?main_file=${encodeURIComponent(mainFile)}`,
+  );
+}
+
+export async function assistantFixCompileError(projectId, log, mainFile) {
+  return request(
+    "POST",
+    `/api/projects/${encodeURIComponent(projectId)}/assistant/fix-compile-error`,
+    { log, main_file: mainFile },
+  );
+}
+
+export async function assistantApply(projectId, proposal, author) {
+  return request(
+    "POST",
+    `/api/projects/${encodeURIComponent(projectId)}/assistant/apply`,
+    { proposal, author: author ?? "AI assistant" },
   );
 }

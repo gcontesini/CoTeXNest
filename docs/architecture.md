@@ -42,6 +42,8 @@ webapp/
     static/                   # the frontend (index.html, css/, js/)
   workspace/<project_id>/     # one real git repo per project (Docker volume)
   plugins/<package_id>/       # shared, global installed-package files (Docker volume)
+  docs/                      # Markdown docs, also a Sphinx source dir (conf.py, index.md)
+  .github/workflows/docs.yml # builds docs/ and deploys it to GitHub Pages
   tests/
 ```
 
@@ -89,6 +91,26 @@ does not result in `webfront` serving a UI that immediately fails every
 API call.
 
 ## Design decisions
+
+### Every piece of state lives in a bind-mounted volume
+
+`workspace/` (project files, one git repo per project) and `plugins/`
+(installed packages) are bind mounts, not Docker-internal named
+volumes -- see "Deployment model" above. This is a deliberate,
+project-wide rule, not just an implementation detail of those two
+directories: **any new persistent state this application ever grows
+must land under a bind-mounted host directory too**, so a user can
+inspect or edit it directly with a text editor/file manager, with no
+container running at all. A feature whose state only exists inside a
+container's internal filesystem, a database only reachable through the
+API, or (for anything server-relevant) in browser-only storage, does
+not meet this bar.
+
+The one accepted exception today is the "author name" shown on saved
+versions, which lives in the browser's `localStorage`
+(`static/js/app.js`): it's a per-browser display preference, not
+project or application configuration, and carries no meaning outside
+the browser session that set it.
 
 ### TeX Live over Tectonic
 

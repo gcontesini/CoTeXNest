@@ -42,6 +42,14 @@ test-cov:
 lint:
   uv run ruff check src tests
 
+# Build the Sphinx documentation site from docs/ into docs/_build/html.
+docs-build:
+  uv run sphinx-build -b html docs docs/_build/html
+
+# Remove the built documentation site.
+docs-clean:
+  rm -rf docs/_build
+
 # Auto-format the code with ruff.
 format:
   uv run ruff format src tests

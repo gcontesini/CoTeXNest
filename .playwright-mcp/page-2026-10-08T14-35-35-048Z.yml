@@ -1,0 +1,65 @@
+- generic [active] [ref=f9e1]:
+  - generic [ref=f9e2]:
+    - navigation "Main menu" [ref=f9e3]:
+      - button "File" [ref=f9e5] [cursor=pointer]
+      - button "Help" [ref=f9e7] [cursor=pointer]
+    - banner [ref=f9e8]:
+      - generic [ref=f9e9]: LaTeX Writer
+      - combobox "Select project" [ref=f9e10]:
+        - option "AssistantUiTest" [selected]
+        - option "Test_latex_project"
+      - button "+ New Project" [ref=f9e11] [cursor=pointer]
+      - button "Delete Project" [ref=f9e12] [cursor=pointer]
+      - button "Compile" [ref=f9e13] [cursor=pointer]
+      - button "Save Version" [ref=f9e14] [cursor=pointer]
+      - button "History" [ref=f9e15] [cursor=pointer]
+      - button "Packages" [ref=f9e16] [cursor=pointer]
+      - button "Assistant" [ref=f9e17] [cursor=pointer]
+    - generic [ref=f9e18]:
+      - complementary [ref=f9e19]:
+        - generic [ref=f9e20]:
+          - generic [ref=f9e21]: Files
+          - button "⟨⟨" [ref=f9e22] [cursor=pointer]
+        - textbox "Search files" [ref=f9e24]:
+          - /placeholder: Search files…
+        - generic [ref=f9e25]:
+          - button "📄+" [ref=f9e26] [cursor=pointer]
+          - button "📁+" [ref=f9e27] [cursor=pointer]
+        - list [ref=f9e29]:
+          - listitem [ref=f9e30]:
+            - generic [ref=f9e31] [cursor=pointer]:
+              - generic [ref=f9e32]: 📄
+              - generic [ref=f9e33]: main.tex
+              - button "⋮" [ref=f9e34]
+      - main [ref=f9e35]:
+        - generic [ref=f9e36]:
+          - generic [ref=f9e37]: main.tex
+          - generic [ref=f9e41]:
+            - generic [ref=f9e43]:
+              - generic [ref=f9e44]: "1"
+              - generic [ref=f9e45]: "2"
+              - generic [ref=f9e46]: "3"
+              - generic [ref=f9e47]: "4"
+              - generic [ref=f9e48]: "5"
+              - generic [ref=f9e49]: "6"
+            - textbox [ref=f9e50]:
+              - generic [ref=f9e51]: "\\documentclass{article}"
+              - generic [ref=f9e53]: "\\begin{document}"
+              - generic [ref=f9e54]: Hello, world!
+              - generic [ref=f9e55]: "\\end{document}"
+        - generic [ref=f9e59]:
+          - generic [ref=f9e60]: Preview
+          - generic [ref=f9e61]: Compiling…
+    - contentinfo [ref=f9e63]:
+      - generic [ref=f9e64]: 71 characters
+      - generic [ref=f9e65]: 5 words
+      - generic [ref=f9e66]: 6 lines
+  - complementary "Version history" [ref=f9e67]:
+    - generic [ref=f9e68]:
+      - heading "Version History" [level=2] [ref=f9e69]
+      - button "✕" [ref=f9e70] [cursor=pointer]
+    - paragraph [ref=f9e72]: Open a project to see its history.
+  - complementary "Packages and templates" [ref=f9e73]:
+    - generic [ref=f9e74]:
+      - heading "Packages & Templates" [level=2] [ref=f9e75]
+      - button "✕" [ref=f9e76] [cursor=pointer]
