@@ -127,6 +127,8 @@ const AUTHOR_NAME_STORAGE_KEY = "latex-writer:author-name";
 
 // ─── Toasts ───
 
+const TOAST_DISMISS_MS = 20000;
+
 /**
  * Show a dismissible banner/toast so errors and confirmations are
  * always visible, never silent console-only failures.
@@ -151,9 +153,7 @@ function notify(message, kind = "info") {
 
   toastContainer.appendChild(toast);
 
-  if (kind !== "error") {
-    setTimeout(() => toast.remove(), 6000);
-  }
+  setTimeout(() => toast.remove(), TOAST_DISMISS_MS);
 
   if (kind === "error") {
     console.error(`[latex-writer] ${message}`);
@@ -806,6 +806,42 @@ async function openProject(projectId) {
     if (isDragging) {
       isDragging = false;
       paneDivider.classList.remove("dragging");
+    }
+  });
+})();
+
+// ─── Resizable assistant dock ───
+
+(function setUpAssistantResize() {
+  const handle = document.getElementById("assistant-resize-handle");
+  let isDragging = false;
+
+  handle.addEventListener("mousedown", (event) => {
+    isDragging = true;
+    handle.classList.add("dragging");
+    event.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!isDragging) {
+      return;
+    }
+
+    const bounds = assistantDock.getBoundingClientRect();
+    const minHeight = 120;
+    const maxHeight = window.innerHeight * 0.8;
+    const newHeight = Math.min(
+      maxHeight,
+      Math.max(minHeight, bounds.bottom - event.clientY),
+    );
+
+    assistantDock.style.height = `${newHeight}px`;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (isDragging) {
+      isDragging = false;
+      handle.classList.remove("dragging");
     }
   });
 })();

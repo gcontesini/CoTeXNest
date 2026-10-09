@@ -10,6 +10,7 @@ Think Overleaf, but it runs on your own machine or server.
 
 getting-started
 editor-ui
+ai-assistant
 architecture
 package-manager
 history

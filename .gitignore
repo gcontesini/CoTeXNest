@@ -17,8 +17,10 @@ __pycache__/
 .claude/
 .ruff_cache/
 
-.pending_tasks
+.tasks
 .resume
 .coverage
 
 /docs/_build/
+
+.playwright-mcp/

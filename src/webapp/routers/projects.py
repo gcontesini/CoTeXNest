@@ -193,6 +193,33 @@ def _apply_template(project_root: Path, template_id: str) -> bool:
     return True
 
 
+_FILESYSTEM_ERROR_HINT = (
+    "Filesystem error: {error}. If this project's files were created via "
+    "Docker and you're now running without Docker (or vice versa), they "
+    "may be owned by a different user than this process -- fix ownership "
+    "(e.g. `sudo chown -R $(whoami) workspace/`) or recreate the project."
+)
+
+
+def _filesystem_error(error: OSError) -> HTTPException:
+    """Translate an unexpected ``OSError`` into a clear, actionable 500.
+
+    Covers failure modes the path-safety/existence checks above don't
+    already turn into a clean 400/404 -- most commonly a permission
+    mismatch from switching between a Docker-created ``workspace/``
+    (root-owned) and a non-Docker ``just dev`` run (a different user).
+
+    Args:
+        error: The ``OSError`` raised by the filesystem operation.
+
+    Returns:
+        HTTPException: 500 with an actionable detail message.
+    """
+    return HTTPException(
+        status_code=500, detail=_FILESYSTEM_ERROR_HINT.format(error=error)
+    )
+
+
 def _init_git_repo(project_root: Path) -> None:
     """Initialize a git repository with an initial commit for a project.
 
@@ -323,12 +350,14 @@ def delete_project(project_id: str) -> dict[str, bool]:
     """
     try:
         project_root = project_files.get_project_dir(project_id)
+        shutil.rmtree(project_root)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
-    shutil.rmtree(project_root)
     return {"success": True}
 
 
@@ -361,6 +390,8 @@ def create_entry(project_id: str, payload: FileCreateRequest) -> FileNode:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
 
 @router.get("/{project_id}/files", response_model=FileNode)
@@ -384,6 +415,8 @@ def get_file_tree(project_id: str) -> FileNode:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
 
 @router.get("/{project_id}/files/{file_path:path}/raw")
@@ -462,14 +495,15 @@ async def upload_file(
     try:
         project_root = project_files.get_project_dir(project_id)
         target = project_files.resolve_safe_path(project_root, file_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        contents = await file.read()
+        target.write_bytes(contents)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    target.parent.mkdir(parents=True, exist_ok=True)
-    contents = await file.read()
-    target.write_bytes(contents)
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
     return FileUploadResult(
         path=file_path,
@@ -499,6 +533,8 @@ def read_file(project_id: str, file_path: str) -> FileContent:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
     return FileContent(path=file_path, content=content)
 
@@ -528,6 +564,8 @@ def write_file(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
     return FileContent(path=file_path, content=payload.content)
 
@@ -554,6 +592,8 @@ def delete_file(project_id: str, file_path: str) -> dict[str, bool]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc
 
     return {"success": True}
 
@@ -587,3 +627,5 @@ def rename_file(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OSError as exc:
+        raise _filesystem_error(exc) from exc

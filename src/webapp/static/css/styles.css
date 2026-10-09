@@ -867,11 +867,27 @@ canvas.pdf-page {
 /* ─── AI assistant dock ─── */
 
 .assistant-dock {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 320px;
   background: var(--color-bg-elevated);
   border-top: 1px solid var(--color-border);
+}
+
+.assistant-resize-handle {
+  position: absolute;
+  top: -3px;
+  left: 0;
+  right: 0;
+  height: 6px;
+  cursor: row-resize;
+  z-index: 10;
+}
+
+.assistant-resize-handle:hover,
+.assistant-resize-handle.dragging {
+  background: var(--color-accent);
 }
 
 .assistant-dock-header {
@@ -945,6 +961,22 @@ canvas.pdf-page {
 
 .chat-message-auto {
   border: 1px dashed var(--color-border);
+}
+
+.chat-message-pending {
+  color: var(--color-text-muted);
+  font-style: italic;
+  animation: chat-pending-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes chat-pending-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .chat-message-label {
@@ -1050,6 +1082,40 @@ canvas.pdf-page {
   width: 100%;
   min-height: 4rem;
   resize: vertical;
+}
+
+.model-pull-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.model-pull-row progress {
+  flex: 1 1 10rem;
+  height: 0.6rem;
+}
+
+.model-pull-status {
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+}
+
+.fallback-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.fallback-profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  font-size: 0.85rem;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm, 4px);
 }
 
 /* ─── Toasts ─── */

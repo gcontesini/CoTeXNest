@@ -133,6 +133,48 @@ class AiModelOption(BaseModel):
     label: str
 
 
+class ModelPullRequest(BaseModel):
+    model: str = Field(min_length=1)
+
+
+class ModelPullStatus(BaseModel):
+    """Progress of an Ollama model pull, polled by the frontend.
+
+    ``status`` mirrors whatever short phrase Ollama itself reports for
+    the current pull stage (e.g. "pulling manifest", "downloading",
+    "verifying sha256 digest"); ``completed_bytes``/``total_bytes`` are
+    only populated while a layer is actively downloading.
+    """
+
+    model: str
+    status: str = "idle"
+    completed_bytes: int | None = None
+    total_bytes: int | None = None
+    done: bool = False
+    error: str | None = None
+
+
+class ExternalProviderProfile(BaseModel):
+    """One configured external-API fallback, tried in order on a
+    rate-limit/quota error from whichever provider answered last.
+    """
+
+    id: str
+    label: str
+    provider_kind: str  # "anthropic" | "openai"
+    base_url: str | None = None
+    model: str
+    has_api_key: bool = False
+
+
+class ExternalProviderProfileCreate(BaseModel):
+    label: str = Field(min_length=1, max_length=80)
+    provider_kind: str = "openai"
+    base_url: str | None = None
+    model: str = Field(min_length=1)
+    api_key: str = Field(min_length=1)
+
+
 class AssistantProposal(BaseModel):
     """One proposed file change the assistant wants to make.
 
@@ -153,12 +195,13 @@ class AssistantProposal(BaseModel):
 
 class AssistantProviderConfig(BaseModel):
     provider: str = "local"  # "local" | "external"
-    local_model: str = "llama3.2:1b"
+    local_model: str | None = None
     external_provider_kind: str = "anthropic"  # "anthropic" | "openai"
     external_base_url: str | None = None
     external_model: str | None = None
     has_external_api_key: bool = False
     writing_style_profile: str | None = None
+    fallback_profiles: list[ExternalProviderProfile] = Field(default_factory=list)
 
 
 class AssistantConfigUpdate(BaseModel):
@@ -184,6 +227,7 @@ class AssistantChatRequest(BaseModel):
 class AssistantChatResult(BaseModel):
     reply: str
     proposals: list[AssistantProposal] = Field(default_factory=list)
+    provider_notice: str | None = None
 
 
 class AssistantApplyRequest(BaseModel):
@@ -212,3 +256,4 @@ class AiAssistRequest(BaseModel):
 class AiAssistResult(BaseModel):
     suggestion: str
     proposal: AssistantProposal | None = None
+    provider_notice: str | None = None

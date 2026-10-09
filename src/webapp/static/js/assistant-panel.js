@@ -24,6 +24,92 @@
 import * as api from "./api.js";
 
 const AUTO_SCAN_INTERVAL_MS = 15000;
+const MODEL_PULL_POLL_INTERVAL_MS = 1500;
+
+// Convenience presets on top of the existing "API style" (anthropic |
+// openai-compatible) + base URL fields -- every one of these providers
+// speaks an OpenAI-compatible chat-completions API, so no new backend
+// integration is needed, just a base URL filled in for you. Base URLs
+// confirmed against each provider's own docs; Perplexity's is left
+// blank below because three separate checks of their own docs
+// returned three different answers -- confirm the current one at
+// https://docs.perplexity.ai before filling it in.
+const EXTERNAL_PROVIDER_PRESETS = [
+  { value: "anthropic", label: "Anthropic (Claude)", kind: "anthropic", baseUrl: null },
+  { value: "openai", label: "OpenAI", kind: "openai", baseUrl: null },
+  {
+    value: "deepseek",
+    label: "DeepSeek",
+    kind: "openai",
+    baseUrl: "https://api.deepseek.com",
+  },
+  {
+    value: "kimi",
+    label: "Kimi (Moonshot AI)",
+    kind: "openai",
+    baseUrl: "https://api.moonshot.ai/v1",
+  },
+  {
+    value: "qwen",
+    label: "Qwen (Alibaba DashScope, international)",
+    kind: "openai",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+  },
+  {
+    value: "gemini",
+    label: "Gemini (Google, OpenAI-compatible)",
+    kind: "openai",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+  },
+  {
+    value: "nvidia",
+    label: "NVIDIA NIM",
+    kind: "openai",
+    baseUrl: "https://integrate.api.nvidia.com/v1",
+  },
+  {
+    value: "perplexity",
+    label: "Perplexity (confirm current base URL in their docs)",
+    kind: "openai",
+    baseUrl: null,
+  },
+  { value: "custom", label: "Custom OpenAI-compatible endpoint", kind: "openai", baseUrl: null },
+];
+
+function presetForKindAndBaseUrl(kind, baseUrl) {
+  return (
+    EXTERNAL_PROVIDER_PRESETS.find(
+      (preset) => preset.kind === kind && preset.baseUrl && preset.baseUrl === baseUrl,
+    ) ?? EXTERNAL_PROVIDER_PRESETS.find((preset) => preset.kind === kind) // generic "openai"/"anthropic"
+  );
+}
+
+function formatBytes(bytes) {
+  if (bytes === null || bytes === undefined) {
+    return null;
+  }
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+function formatEta(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return null;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return minutes > 0 ? `${minutes}m ${secs}s` : `${secs}s`;
+}
 
 function createElement(tagName, className, textContent) {
   const element = document.createElement(tagName);
@@ -173,6 +259,29 @@ export function createAssistantPanel({
     scrollChatToBottom();
   }
 
+  /**
+   * Show a "Thinking…" placeholder while a request is in flight, so a
+   * slow reply (a cold-start model pull can take minutes) reads as
+   * "working" rather than "did nothing happen?".
+   *
+   * @returns {Element} The placeholder bubble -- call `.remove()` on
+   *   it once the real reply (or an error) has been handled.
+   */
+  function appendPendingIndicator() {
+    chatLogContainer.querySelector(".empty-state")?.remove();
+
+    const bubble = createElement(
+      "div",
+      "chat-message chat-message-assistant chat-message-pending",
+      "Thinking…",
+    );
+
+    chatLogContainer.appendChild(bubble);
+    scrollChatToBottom();
+
+    return bubble;
+  }
+
   chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
@@ -193,6 +302,7 @@ export function createAssistantPanel({
 
     const submitButton = chatForm.querySelector('button[type="submit"]');
     submitButton.disabled = true;
+    const pendingBubble = appendPendingIndicator();
 
     try {
       const result = await api.assistantChat(
@@ -201,12 +311,17 @@ export function createAssistantPanel({
         getCurrentFilePath(),
       );
       conversation.push({ role: "assistant", content: result.reply });
+      pendingBubble.remove();
       appendMessage({
         role: "assistant",
         content: result.reply,
         proposals: result.proposals,
       });
+      if (result.provider_notice) {
+        notify(result.provider_notice, "info");
+      }
     } catch (error) {
+      pendingBubble.remove();
       notify(`Assistant request failed: ${error.message}`, "error");
     } finally {
       submitButton.disabled = false;
@@ -227,14 +342,21 @@ export function createAssistantPanel({
       content: "The project failed to compile. Can you help fix it?",
     });
 
+    const pendingBubble = appendPendingIndicator();
+
     try {
       const result = await api.assistantFixCompileError(projectId, logText, mainFile);
+      pendingBubble.remove();
       appendMessage({
         role: "assistant",
         content: result.suggestion,
         proposals: result.proposal ? [result.proposal] : [],
       });
+      if (result.provider_notice) {
+        notify(result.provider_notice, "info");
+      }
     } catch (error) {
+      pendingBubble.remove();
       notify(`Assistant request failed: ${error.message}`, "error");
     }
   }
@@ -282,18 +404,22 @@ export function createAssistantPanel({
     providerSection.appendChild(radioRow);
 
     // Local provider fields
-    const localFields = createElement("div", "form-row");
+    const localFields = createElement("div", "panel-section");
     localFields.classList.toggle("hidden", cfg.provider !== "local");
-    localFields.appendChild(
+
+    const localModelRow = createElement("div", "form-row");
+    localModelRow.appendChild(
       createElement(
         "label",
         null,
-        "Model (pick one, or type a new Ollama model tag to pull it on first use)",
+        "Model -- paste any tag exactly as shown on https://ollama.com/library " +
+          "(e.g. qwen2.5-coder:3b), or pick one already pulled",
       ),
     );
     const localModelInput = document.createElement("input");
     localModelInput.type = "text";
-    localModelInput.value = cfg.local_model;
+    localModelInput.value = cfg.local_model ?? "";
+    localModelInput.placeholder = "e.g. qwen2.5-coder:3b";
     localModelInput.setAttribute("list", "assistant-local-model-options");
     const modelDatalist = document.createElement("datalist");
     modelDatalist.id = "assistant-local-model-options";
@@ -309,14 +435,135 @@ export function createAssistantPanel({
       // Best-effort: an empty datalist just means free-typing only.
     }
 
-    localFields.append(localModelInput, modelDatalist);
+    localModelRow.append(localModelInput, modelDatalist);
+    localFields.appendChild(localModelRow);
+
+    if (!cfg.local_model) {
+      localFields.appendChild(
+        createElement(
+          "p",
+          "empty-state",
+          "No model configured yet -- the assistant won't do anything " +
+            "until you pull one here or add an external API key below.",
+        ),
+      );
+    }
+
+    // Pull progress (item: download progress bar + ETA + ready pop-up)
+    const pullRow = createElement("div", "model-pull-row");
+    const pullButton = createElement("button", "btn btn-icon", "Pull model");
+    pullButton.type = "button";
+    const pullProgressBar = document.createElement("progress");
+    pullProgressBar.max = 100;
+    pullProgressBar.value = 0;
+    pullProgressBar.classList.add("hidden");
+    const pullStatusLabel = createElement("span", "model-pull-status", "");
+    pullRow.append(pullButton, pullProgressBar, pullStatusLabel);
+    localFields.appendChild(pullRow);
+
+    let pullPollTimer = null;
+
+    pullButton.addEventListener("click", async () => {
+      const modelName = localModelInput.value.trim();
+
+      if (!modelName) {
+        notify(
+          "Type a model name first (paste one from https://ollama.com/library).",
+          "error",
+        );
+        return;
+      }
+
+      pullButton.disabled = true;
+      pullProgressBar.classList.remove("hidden");
+      pullProgressBar.removeAttribute("value"); // indeterminate until we see byte counts
+      pullStatusLabel.textContent = "starting…";
+
+      try {
+        await api.pullAssistantModel(modelName);
+      } catch (error) {
+        notify(`Could not start pulling the model: ${error.message}`, "error");
+        pullButton.disabled = false;
+        pullProgressBar.classList.add("hidden");
+        return;
+      }
+
+      let lastSample = null;
+
+      pullPollTimer = setInterval(async () => {
+        let status;
+
+        try {
+          status = await api.getAssistantModelPullStatus(modelName);
+        } catch {
+          return; // transient poll failure -- try again next tick
+        }
+
+        if (status.total_bytes && status.completed_bytes !== null) {
+          pullProgressBar.value = Math.min(
+            100,
+            (status.completed_bytes / status.total_bytes) * 100,
+          );
+
+          let etaText = "";
+          const now = Date.now();
+
+          if (lastSample) {
+            const deltaBytes = status.completed_bytes - lastSample.bytes;
+            const deltaMs = now - lastSample.time;
+
+            if (deltaBytes > 0 && deltaMs > 0) {
+              const remainingBytes = status.total_bytes - status.completed_bytes;
+              const etaSeconds = (remainingBytes / deltaBytes) * (deltaMs / 1000);
+              const formatted = formatEta(etaSeconds);
+              if (formatted) {
+                etaText = ` -- ETA ${formatted}`;
+              }
+            }
+          }
+
+          lastSample = { bytes: status.completed_bytes, time: now };
+          pullStatusLabel.textContent =
+            `${status.status} (${formatBytes(status.completed_bytes)} / ` +
+            `${formatBytes(status.total_bytes)})${etaText}`;
+        } else {
+          pullStatusLabel.textContent = status.status || "working…";
+        }
+
+        if (status.done) {
+          clearInterval(pullPollTimer);
+          pullPollTimer = null;
+          pullButton.disabled = false;
+          pullProgressBar.classList.add("hidden");
+
+          if (status.error) {
+            notify(`Model pull failed: ${status.error}`, "error");
+          } else {
+            notify(`Model "${modelName}" is ready.`, "success");
+            await refreshSettings();
+          }
+        }
+      }, MODEL_PULL_POLL_INTERVAL_MS);
+    });
+
     providerSection.appendChild(localFields);
 
     // External provider fields
     const externalFields = createElement("div", "panel-section");
     externalFields.classList.toggle("hidden", cfg.provider !== "external");
 
-    const kindRow = createElement("div", "form-row");
+    const presetRow = createElement("div", "form-row");
+    presetRow.appendChild(createElement("label", null, "Provider"));
+    const presetSelect = document.createElement("select");
+    for (const preset of EXTERNAL_PROVIDER_PRESETS) {
+      const option = document.createElement("option");
+      option.value = preset.value;
+      option.textContent = preset.label;
+      presetSelect.appendChild(option);
+    }
+    presetRow.appendChild(presetSelect);
+
+    const kindRow = createElement("div", "form-row hidden");
     kindRow.appendChild(createElement("label", null, "API style"));
     const kindSelect = document.createElement("select");
     for (const [value, label] of [
@@ -330,6 +577,14 @@ export function createAssistantPanel({
       kindSelect.appendChild(option);
     }
     kindRow.appendChild(kindSelect);
+
+    const currentPreset = presetForKindAndBaseUrl(
+      cfg.external_provider_kind,
+      cfg.external_base_url,
+    );
+    if (currentPreset) {
+      presetSelect.value = currentPreset.value;
+    }
 
     const baseUrlRow = createElement("div", "form-row");
     baseUrlRow.appendChild(
@@ -346,6 +601,23 @@ export function createAssistantPanel({
     externalModelInput.type = "text";
     externalModelInput.value = cfg.external_model ?? "";
     modelRow.appendChild(externalModelInput);
+
+    presetSelect.addEventListener("change", () => {
+      const preset = EXTERNAL_PROVIDER_PRESETS.find((p) => p.value === presetSelect.value);
+      if (!preset) {
+        return;
+      }
+      kindSelect.value = preset.kind;
+      baseUrlInput.value = preset.baseUrl ?? "";
+      // A model id from one provider is essentially never a model id
+      // another provider recognizes -- switching the preset without
+      // clearing this would silently let a stale, mismatched model
+      // get saved alongside the new base URL (observed live: Gemini's
+      // base URL saved together with NVIDIA's leftover model id,
+      // which fails every request with an opaque "400 Bad Request"
+      // until someone notices the mismatch).
+      externalModelInput.value = "";
+    });
 
     const apiKeyRow = createElement("div", "form-row");
     apiKeyRow.appendChild(
@@ -375,7 +647,7 @@ export function createAssistantPanel({
       apiKeyRow.appendChild(clearKeyButton);
     }
 
-    externalFields.append(kindRow, baseUrlRow, modelRow, apiKeyRow);
+    externalFields.append(presetRow, kindRow, baseUrlRow, modelRow, apiKeyRow);
     providerSection.appendChild(externalFields);
 
     localRadio.addEventListener("change", () => {
@@ -420,6 +692,142 @@ export function createAssistantPanel({
     providerSection.appendChild(saveButton);
     wrapper.appendChild(providerSection);
 
+    // Fallback providers -- tried in order, automatically, whenever
+    // the active external provider comes back rate-limited/out of
+    // quota (see generate_completion's failover in assistant.py).
+    const fallbackSection = createElement("div", "assistant-settings-section");
+    fallbackSection.appendChild(createElement("h3", null, "Fallback providers"));
+    fallbackSection.appendChild(
+      createElement(
+        "p",
+        null,
+        "Tried in order, automatically, whenever the active external " +
+          "provider is rate-limited or out of quota -- the one that " +
+          "works becomes the new active provider.",
+      ),
+    );
+
+    if (cfg.fallback_profiles.length === 0) {
+      fallbackSection.appendChild(
+        createElement("p", "empty-state", "No fallback providers configured."),
+      );
+    } else {
+      const list = createElement("div", "fallback-profile-list");
+      for (const profile of cfg.fallback_profiles) {
+        const row = createElement("div", "fallback-profile-row");
+        row.appendChild(
+          createElement(
+            "span",
+            null,
+            `${profile.label} (${profile.provider_kind}, ${profile.model})`,
+          ),
+        );
+        const removeButton = createElement("button", "btn btn-icon", "Remove");
+        removeButton.type = "button";
+        removeButton.addEventListener("click", async () => {
+          try {
+            await api.removeAssistantFallbackProvider(profile.id);
+            notify("Fallback provider removed.", "success");
+            await refreshSettings();
+          } catch (error) {
+            notify(`Could not remove fallback provider: ${error.message}`, "error");
+          }
+        });
+        row.appendChild(removeButton);
+        list.appendChild(row);
+      }
+      fallbackSection.appendChild(list);
+    }
+
+    const fallbackPresetRow = createElement("div", "form-row");
+    fallbackPresetRow.appendChild(createElement("label", null, "Add fallback -- provider"));
+    const fallbackPresetSelect = document.createElement("select");
+    for (const preset of EXTERNAL_PROVIDER_PRESETS) {
+      const option = document.createElement("option");
+      option.value = preset.value;
+      option.textContent = preset.label;
+      fallbackPresetSelect.appendChild(option);
+    }
+    fallbackPresetRow.appendChild(fallbackPresetSelect);
+
+    const fallbackLabelRow = createElement("div", "form-row");
+    fallbackLabelRow.appendChild(createElement("label", null, "Label"));
+    const fallbackLabelInput = document.createElement("input");
+    fallbackLabelInput.type = "text";
+    fallbackLabelInput.placeholder = "e.g. DeepSeek backup";
+    fallbackLabelRow.appendChild(fallbackLabelInput);
+
+    const fallbackBaseUrlRow = createElement("div", "form-row");
+    fallbackBaseUrlRow.appendChild(
+      createElement("label", null, "Base URL (leave blank for the provider's default)"),
+    );
+    const fallbackBaseUrlInput = document.createElement("input");
+    fallbackBaseUrlInput.type = "text";
+    fallbackBaseUrlRow.appendChild(fallbackBaseUrlInput);
+
+    fallbackPresetSelect.addEventListener("change", () => {
+      const preset = EXTERNAL_PROVIDER_PRESETS.find(
+        (p) => p.value === fallbackPresetSelect.value,
+      );
+      fallbackBaseUrlInput.value = preset?.baseUrl ?? "";
+    });
+
+    const fallbackModelRow = createElement("div", "form-row");
+    fallbackModelRow.appendChild(createElement("label", null, "Model"));
+    const fallbackModelInput = document.createElement("input");
+    fallbackModelInput.type = "text";
+    fallbackModelRow.appendChild(fallbackModelInput);
+
+    const fallbackApiKeyRow = createElement("div", "form-row");
+    fallbackApiKeyRow.appendChild(createElement("label", null, "API key"));
+    const fallbackApiKeyInput = document.createElement("input");
+    fallbackApiKeyInput.type = "password";
+    fallbackApiKeyInput.autocomplete = "off";
+    fallbackApiKeyRow.appendChild(fallbackApiKeyInput);
+
+    const addFallbackButton = createElement("button", "btn btn-icon", "Add fallback provider");
+    addFallbackButton.type = "button";
+    addFallbackButton.addEventListener("click", async () => {
+      const preset = EXTERNAL_PROVIDER_PRESETS.find(
+        (p) => p.value === fallbackPresetSelect.value,
+      );
+      const label = fallbackLabelInput.value.trim() || preset?.label || "fallback";
+      const model = fallbackModelInput.value.trim();
+      const apiKey = fallbackApiKeyInput.value.trim();
+
+      if (!model || !apiKey) {
+        notify("A fallback provider needs at least a model and an API key.", "error");
+        return;
+      }
+
+      addFallbackButton.disabled = true;
+
+      try {
+        await api.addAssistantFallbackProvider({
+          label,
+          provider_kind: preset?.kind ?? "openai",
+          base_url: fallbackBaseUrlInput.value.trim() || null,
+          model,
+          api_key: apiKey,
+        });
+        notify("Fallback provider added.", "success");
+        await refreshSettings();
+      } catch (error) {
+        notify(`Could not add fallback provider: ${error.message}`, "error");
+        addFallbackButton.disabled = false;
+      }
+    });
+
+    fallbackSection.append(
+      fallbackPresetRow,
+      fallbackLabelRow,
+      fallbackBaseUrlRow,
+      fallbackModelRow,
+      fallbackApiKeyRow,
+      addFallbackButton,
+    );
+    wrapper.appendChild(fallbackSection);
+
     // Writing style
     const styleSection = createElement("div", "assistant-settings-section");
     styleSection.appendChild(createElement("h3", null, "Writing style"));
@@ -428,6 +836,22 @@ export function createAssistantPanel({
       styleSection.appendChild(
         createElement("p", null, `Current profile: ${cfg.writing_style_profile}`),
       );
+
+      const deleteStyleButton = createElement("button", "btn btn-icon", "Delete writing style");
+      deleteStyleButton.type = "button";
+      deleteStyleButton.addEventListener("click", async () => {
+        deleteStyleButton.disabled = true;
+
+        try {
+          await api.deleteWritingStyle();
+          notify("Writing style deleted.", "success");
+          await refreshSettings();
+        } catch (error) {
+          notify(`Could not delete writing style: ${error.message}`, "error");
+          deleteStyleButton.disabled = false;
+        }
+      });
+      styleSection.appendChild(deleteStyleButton);
     } else {
       styleSection.appendChild(
         createElement("p", "empty-state", "No writing style learned yet."),

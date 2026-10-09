@@ -12,15 +12,17 @@ answered.
 Tool-calling protocol: rather than depending on a specific provider's
 native structured tool-calling API (support for which varies widely,
 especially on the kind of small model this is meant to run locally),
-the model is instructed, via the system prompt, to reply with a single
-JSON object: ``{"reply": "...", "proposals": [...]}``. This is a
-deliberate simplification -- it trades the precision of a real
-tool-calling API for working the same way against *any* chat-capable
-model, local or external, small or large. ``_parse_json_response``
-tolerates a model that doesn't follow the format perfectly (wraps its
-answer in prose, in a markdown fence, etc.) by falling back to
-treating the whole reply as plain text with no proposals, rather than
-raising.
+the model is instructed, via the system prompt, to reply in two parts:
+a JSON object for structure (``{"reply": "...", "proposals": [...]}``)
+and, separately, plain ``---CONTENT---``-delimited blocks for any file
+content. The split exists because LaTeX is full of backslash commands,
+which are not valid JSON escapes unless doubled -- a mistake small
+models make close to always, which used to silently corrupt or drop
+proposals outright. See ``_parse_model_response`` for the full parse
+(JSON object via ``_extract_json_object``, content via
+``_extract_content_blocks``), which falls back to treating the whole
+reply as plain text with no proposals if even this tolerant parse
+doesn't find a usable JSON object, rather than raising.
 
 Safety model: nothing here writes to a project's files except
 ``apply_proposal``, which always goes through ``services.project_files``
@@ -37,6 +39,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import uuid
 from typing import Any
 
@@ -50,13 +53,29 @@ from ..models import (
     AssistantConfigUpdate,
     AssistantProposal,
     AssistantProviderConfig,
+    ExternalProviderProfile,
+    ExternalProviderProfileCreate,
+    ModelPullStatus,
 )
 from . import git_history, project_files
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LOCAL_MODEL = "llama3.2:1b"
+# Deliberately NOT auto-selected anywhere -- shipping a default would
+# mean every fresh deployment silently pulls a multi-gigabyte model the
+# user never asked for. Only used as a suggestion string in docs/UI
+# copy. Live testing showed sub-1B models (llama3.2:1b, qwen2.5:0.5b,
+# gemma3:1b) almost never produce a usable fix-compile-error proposal,
+# while a code-tuned ~3B model succeeds close to consistently -- see "A
+# note on model capability" in docs/ai-assistant.md.
+_SUGGESTED_LOCAL_MODEL = "qwen2.5-coder:3b"
 _MODEL_PULL_TIMEOUT_SECONDS = 600
+
+# A proposal's content can legitimately be a full LaTeX document, so
+# every provider call needs a generation-length cap generous enough to
+# not cut a reply off right as it reaches that content -- observed
+# live against Ollama's own (historically ~128-token) default.
+_MAX_RESPONSE_TOKENS = 4096
 
 _DEFAULT_EXTERNAL_BASE_URLS: dict[str, str] = {
     "anthropic": "https://api.anthropic.com",
@@ -70,26 +89,39 @@ _PROPOSAL_ACTIONS: set[str] = {
     "rename_entry",
 }
 
+_CONTENT_BLOCK_MARKER = "---CONTENT---"
+
 _JSON_PROPOSAL_INSTRUCTIONS = (
-    "Respond with a single JSON object and nothing else -- no prose "
-    "before or after it, no markdown code fences. The object must have "
-    'this exact shape: {"reply": "<a short message to show the '
-    'user>", "proposals": [<zero or more proposal objects>]}. Each '
+    "Respond in two parts.\n\n"
+    "Part 1: a single JSON object and nothing else on those lines -- "
+    "no prose before or after it, no markdown code fences. The object "
+    'must have this exact shape: {"reply": "<a short message to show '
+    'the user>", "proposals": [<zero or more proposal objects>]}. Each '
     "proposal object is one of:\n"
     '  {"action": "write_file", "path": "<project-relative path>", '
-    '"content": "<the full new file content>", "description": '
-    '"<one sentence summary>"}\n'
+    '"description": "<one sentence summary>"}\n'
     '  {"action": "create_entry", "path": "<path>", "entry_type": '
-    '"file" or "dir", "content": "<initial content, files only, may '
-    'be empty>", "description": "..."}\n'
+    '"file" or "dir", "description": "..."}\n'
     '  {"action": "delete_entry", "path": "<path>", "description": "..."}\n'
     '  {"action": "rename_entry", "path": "<current path>", '
     '"new_path": "<new path>", "description": "..."}\n'
+    "IMPORTANT: never put file content inside this JSON. LaTeX is full "
+    "of backslash commands, which break JSON string escaping almost "
+    "every time -- leave file content out of the JSON entirely.\n\n"
+    "Part 2: only if a write_file or create_entry (of a file, not a "
+    "folder) proposal needs content, follow the JSON with one block "
+    "per such proposal, in the same order they appear in "
+    f'"proposals", each wrapped exactly like this (two lines reading '
+    f"{_CONTENT_BLOCK_MARKER}, with the content verbatim between them "
+    "-- no escaping, no markdown fence):\n"
+    f"{_CONTENT_BLOCK_MARKER}\n"
+    "<the exact file content>\n"
+    f"{_CONTENT_BLOCK_MARKER}\n\n"
     "Never invent a proposal the user did not ask for -- if you are "
-    'only answering a question, return an empty "proposals" list. '
-    "When you do propose a write_file change, keep it additive and "
-    "targeted: add or refine content rather than deleting sections "
-    "the user did not ask you to remove."
+    'only answering a question, return an empty "proposals" list and '
+    "no content blocks. When you do propose a write_file change, keep "
+    "it additive and targeted: add or refine content rather than "
+    "deleting sections the user did not ask you to remove."
 )
 
 
@@ -99,12 +131,21 @@ _JSON_PROPOSAL_INSTRUCTIONS = (
 def _default_config_dict() -> dict[str, Any]:
     return {
         "provider": "local",
-        "local_model": _DEFAULT_LOCAL_MODEL,
+        # No default: a fresh deployment must not silently pull a
+        # multi-gigabyte model. The user must explicitly name one
+        # (Settings tab, or PUT /api/assistant/config) or switch to an
+        # external API key before the assistant does anything.
+        "local_model": None,
         "external_provider_kind": "anthropic",
         "external_base_url": None,
         "external_model": None,
         "external_api_key": None,
         "writing_style_profile": None,
+        # Ordered list of additional external providers to try, in
+        # order, when the active one answers with a rate-limit/quota
+        # error -- see generate_completion()'s failover. Each entry:
+        # {id, label, provider_kind, base_url, model, api_key}.
+        "fallback_profiles": [],
     }
 
 
@@ -142,18 +183,29 @@ def get_config() -> AssistantProviderConfig:
     """Return the current assistant configuration.
 
     Returns:
-        AssistantProviderConfig: Never includes the raw API key, only
-        whether one is set (``has_external_api_key``).
+        AssistantProviderConfig: Never includes a raw API key (primary
+        or fallback), only whether one is set.
     """
     raw = _load_raw_config()
     return AssistantProviderConfig(
         provider=raw["provider"],
-        local_model=raw["local_model"],
+        local_model=raw.get("local_model"),
         external_provider_kind=raw["external_provider_kind"],
         external_base_url=raw.get("external_base_url"),
         external_model=raw.get("external_model"),
         has_external_api_key=bool(raw.get("external_api_key")),
         writing_style_profile=raw.get("writing_style_profile"),
+        fallback_profiles=[
+            ExternalProviderProfile(
+                id=profile["id"],
+                label=profile["label"],
+                provider_kind=profile["provider_kind"],
+                base_url=profile.get("base_url"),
+                model=profile["model"],
+                has_api_key=bool(profile.get("api_key")),
+            )
+            for profile in raw.get("fallback_profiles", [])
+        ],
     )
 
 
@@ -205,6 +257,63 @@ def update_config(update: AssistantConfigUpdate) -> AssistantProviderConfig:
     return get_config()
 
 
+def add_fallback_profile(payload: ExternalProviderProfileCreate) -> AssistantProviderConfig:
+    """Append one external-provider fallback, tried on a rate-limit/quota error.
+
+    Args:
+        payload (ExternalProviderProfileCreate): The fallback's own
+            kind/base_url/model/api_key -- independent of the primary
+            external provider's configuration.
+
+    Returns:
+        AssistantProviderConfig: The configuration after the addition.
+
+    Raises:
+        ValueError: If ``provider_kind`` is not recognized.
+    """
+    if payload.provider_kind not in ("anthropic", "openai"):
+        raise ValueError('provider_kind must be "anthropic" or "openai"')
+
+    raw = _load_raw_config()
+    profiles = raw.setdefault("fallback_profiles", [])
+    profiles.append(
+        {
+            "id": str(uuid.uuid4()),
+            "label": payload.label,
+            "provider_kind": payload.provider_kind,
+            "base_url": payload.base_url,
+            "model": payload.model,
+            "api_key": payload.api_key,
+        }
+    )
+    _save_raw_config(raw)
+    return get_config()
+
+
+def remove_fallback_profile(profile_id: str) -> AssistantProviderConfig:
+    """Remove one previously-added fallback provider.
+
+    Args:
+        profile_id (str): The fallback's id, from ``get_config()``.
+
+    Returns:
+        AssistantProviderConfig: The configuration after the removal.
+
+    Raises:
+        FileNotFoundError: If no fallback profile has this id.
+    """
+    raw = _load_raw_config()
+    profiles = raw.get("fallback_profiles", [])
+    remaining = [profile for profile in profiles if profile["id"] != profile_id]
+
+    if len(remaining) == len(profiles):
+        raise FileNotFoundError(f"no fallback profile with id {profile_id!r}")
+
+    raw["fallback_profiles"] = remaining
+    _save_raw_config(raw)
+    return get_config()
+
+
 def set_writing_style_profile(profile: str) -> None:
     """Persist a newly-learned writing-style profile.
 
@@ -214,6 +323,18 @@ def set_writing_style_profile(profile: str) -> None:
     """
     raw = _load_raw_config()
     raw["writing_style_profile"] = profile
+    _save_raw_config(raw)
+
+
+def clear_writing_style_profile() -> None:
+    """Delete the saved writing-style profile, if any.
+
+    Future prompts built by this module simply omit the "established
+    writing style" section (see ``_build_system_prompt``) until a new
+    one is learned via ``learn_writing_style``.
+    """
+    raw = _load_raw_config()
+    raw["writing_style_profile"] = None
     _save_raw_config(raw)
 
 
@@ -231,19 +352,133 @@ def _ollama_has_model(model: str, base_url: str) -> bool:
     return model in names or f"{model}:latest" in names
 
 
+_pull_status_lock = threading.Lock()
+_pull_status: dict[str, dict[str, Any]] = {}
+
+
+def _idle_pull_status(model: str) -> dict[str, Any]:
+    return {
+        "model": model,
+        "status": "idle",
+        "completed_bytes": None,
+        "total_bytes": None,
+        "done": False,
+        "error": None,
+    }
+
+
+def get_pull_status(model: str) -> ModelPullStatus:
+    """Report the current progress of a model pull, for frontend polling.
+
+    Args:
+        model (str): The Ollama model tag, exactly as configured.
+
+    Returns:
+        ModelPullStatus: ``status="idle"`` if no pull for this exact
+        model tag has ever been started in this process's lifetime.
+    """
+    with _pull_status_lock:
+        state = dict(_pull_status.get(model, _idle_pull_status(model)))
+
+    return ModelPullStatus(**state)
+
+
+def _set_pull_status(model: str, **fields: Any) -> None:
+    with _pull_status_lock:
+        state = _pull_status.setdefault(model, _idle_pull_status(model))
+        state.update(fields)
+
+
+def start_model_pull(model: str) -> None:
+    """Kick off a model pull on a background thread and return immediately.
+
+    Idempotent while a pull for the same model tag is already in
+    flight, so an explicit "Pull model" click racing the implicit
+    first-chat auto-pull (or a double click) can't start two
+    concurrent pulls of the same model.
+
+    Args:
+        model (str): The Ollama model tag to pull.
+    """
+    with _pull_status_lock:
+        existing = _pull_status.get(model)
+        if existing is not None and not existing["done"]:
+            return
+        _pull_status[model] = _idle_pull_status(model)
+        _pull_status[model]["status"] = "starting"
+
+    thread = threading.Thread(target=_pull_model_thread, args=(model,), daemon=True)
+    thread.start()
+
+
+def _pull_model_thread(model: str) -> None:
+    try:
+        _ensure_ollama_model(model, config.OLLAMA_BASE_URL)
+    except ConnectionError as error:
+        # _ensure_ollama_model already recorded the error in
+        # _pull_status for the polling endpoint to surface; logging
+        # here is this background thread's only other way to report
+        # it, since there is no caller left to raise to.
+        logger.warning("background pull of %r failed: %s", model, error)
+
+
 def _ensure_ollama_model(model: str, base_url: str) -> None:
     """Pull a model into the local Ollama server if not present.
 
     Blocks until the pull completes (or fails) -- model pulls can take
     minutes, hence the much longer timeout than a normal chat request.
+    Streams Ollama's own NDJSON progress events (status string, plus
+    completed/total byte counts while a layer is downloading) into
+    ``_pull_status`` as they arrive, so ``GET
+    /api/assistant/models/pull-status`` can show live progress whether
+    the pull was started explicitly or implicitly by a chat call.
+
+    Raises:
+        ConnectionError: If Ollama can't be reached at all (not just a
+            failed pull) -- without this, a connection-refused error
+            here would otherwise propagate as an unhandled httpx
+            exception instead of the clean, user-facing error the rest
+            of this module produces.
     """
     logger.info("pulling ollama model %r (first use)...", model)
-    response = httpx.post(
-        f"{base_url.rstrip('/')}/api/pull",
-        json={"model": model, "stream": False},
-        timeout=_MODEL_PULL_TIMEOUT_SECONDS,
-    )
-    response.raise_for_status()
+    _set_pull_status(model, status="starting", done=False, error=None)
+
+    try:
+        with httpx.stream(
+            "POST",
+            f"{base_url.rstrip('/')}/api/pull",
+            json={"model": model, "stream": True},
+            timeout=_MODEL_PULL_TIMEOUT_SECONDS,
+        ) as response:
+            response.raise_for_status()
+
+            for line in response.iter_lines():
+                if not line:
+                    continue
+
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                _set_pull_status(
+                    model,
+                    status=str(event.get("status", "")),
+                    completed_bytes=event.get("completed"),
+                    total_bytes=event.get("total"),
+                )
+    except httpx.HTTPError as error:
+        message = (
+            f"could not reach the local Ollama server at {base_url} "
+            f"to pull model {model!r}: {error}"
+        )
+        _set_pull_status(model, status="error", done=True, error=message)
+        raise ConnectionError(message) from error
+
+    # Leave `status` as whatever Ollama's own last event reported
+    # (normally "success") rather than overwriting it -- `done` is the
+    # authoritative "finished" flag the frontend polls on.
+    _set_pull_status(model, done=True, error=None)
 
 
 def _call_ollama(messages: list[dict[str, str]], model: str) -> str:
@@ -255,7 +490,17 @@ def _call_ollama(messages: list[dict[str, str]], model: str) -> str:
     try:
         response = httpx.post(
             f"{base_url.rstrip('/')}/api/chat",
-            json={"model": model, "messages": messages, "stream": False},
+            json={
+                "model": model,
+                "messages": messages,
+                "stream": False,
+                # Ollama's own default generation length is short enough
+                # (historically 128 tokens) to routinely cut a reply off
+                # right as it reaches the file content -- observed live
+                # across multiple models. A proposal's content can
+                # legitimately be a full LaTeX document.
+                "options": {"num_predict": _MAX_RESPONSE_TOKENS},
+            },
             timeout=config.AI_ASSIST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
@@ -267,6 +512,123 @@ def _call_ollama(messages: list[dict[str, str]], model: str) -> str:
     return str(response.json()["message"]["content"])
 
 
+_STATUS_CODE_HINTS: dict[int, str] = {
+    400: (
+        "the provider rejected the request as malformed -- a common cause "
+        "is a base URL or API key format that doesn't match the API style "
+        "you've selected (e.g. an Anthropic key with an OpenAI-compatible "
+        "base URL, or vice versa)."
+    ),
+    401: "the API key was rejected -- check it's correct and still active.",
+    403: "the API key doesn't have access to this model/endpoint.",
+    404: (
+        "the model name wasn't found -- double-check it's a real, current "
+        "model id for this provider (model names change over time)."
+    ),
+    429: (
+        "the provider is rate-limiting or your quota/billing is exhausted "
+        "-- check your account's usage and billing page."
+    ),
+    503: (
+        "the provider's own servers are temporarily overloaded/unavailable "
+        "-- this is usually transient; try again in a moment."
+    ),
+}
+
+
+class ProviderRateLimitedError(ConnectionError):
+    """An external provider is reachable but returned HTTP 429.
+
+    A distinct type (rather than a plain ``ConnectionError``) because
+    this is specifically the condition ``generate_completion``'s
+    automatic failover reacts to -- a wrong API key or bad model name
+    should surface to the user as-is, not silently try a different
+    provider.
+    """
+
+
+def _extract_provider_error_detail(response: httpx.Response) -> str | None:
+    """Pull the provider's own error message out of its response body.
+
+    A single HTTP status code can cover genuinely different conditions
+    -- OpenAI returns 429 for both "too many requests per minute" and
+    "zero quota remaining", distinguished only by ``error.type`` in the
+    body (``rate_limit_exceeded`` vs ``insufficient_quota``). Reporting
+    the provider's own wording is strictly more informative than
+    guessing from the status code alone, and is what actually resolves
+    the "429 but my dashboard shows no requests and plenty of credit"
+    confusion: those are two different things sharing one status code.
+
+    Args:
+        response (httpx.Response): The provider's HTTP response.
+
+    Returns:
+        str | None: A short, human-readable detail string if the body
+        had a recognizable shape (OpenAI/Anthropic-style
+        ``{"error": {...}}``, or a bare ``{"message": ...}``), else
+        None.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+
+    if not isinstance(body, dict):
+        return None
+
+    error_obj = body.get("error")
+
+    if isinstance(error_obj, dict):
+        kind = error_obj.get("type") or error_obj.get("code")
+        message = error_obj.get("message")
+        if kind and message:
+            return f"{kind}: {message}"
+        return str(message or kind) if (message or kind) else None
+
+    message = body.get("message")
+    return str(message) if message else None
+
+
+def _external_provider_error(error: httpx.HTTPError) -> ConnectionError:
+    """Build a clear, actionable error for a failed external-provider call.
+
+    Distinguishes "reachable but rejected the request" (an HTTP status
+    error -- wrong API key, invalid model name, rate limit) from
+    "couldn't even connect" (DNS/network failure), since the former
+    has specific, fixable causes worth surfacing instead of a generic
+    "could not reach" message. Prefers the provider's own reported
+    error detail over a generic status-code-based hint whenever the
+    response body has one.
+
+    Args:
+        error (httpx.HTTPError): The error raised by the request.
+
+    Returns:
+        ConnectionError: A ``ProviderRateLimitedError`` for a 429 (so
+        ``generate_completion`` can fail over to a fallback provider),
+        a plain ``ConnectionError`` otherwise.
+    """
+    if isinstance(error, httpx.HTTPStatusError):
+        status_code = error.response.status_code
+        provider_detail = _extract_provider_error_detail(error.response)
+        hint = _STATUS_CODE_HINTS.get(status_code)
+        detail = (
+            f" ({provider_detail})"
+            if provider_detail
+            else (f" ({hint})" if hint else "")
+        )
+        message = (
+            f"external provider rejected the request with "
+            f"{status_code} {error.response.reason_phrase}{detail}"
+        )
+
+        if status_code == 429:
+            return ProviderRateLimitedError(message)
+        return ConnectionError(message)
+
+    return ConnectionError(f"could not reach the external provider: {error}")
+
+
 def _call_external_openai(
     messages: list[dict[str, str]], model: str, base_url: str, api_key: str
 ) -> str:
@@ -274,12 +636,16 @@ def _call_external_openai(
         response = httpx.post(
             f"{base_url.rstrip('/')}/chat/completions",
             headers={"Authorization": f"Bearer {api_key}"},
-            json={"model": model, "messages": messages},
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": _MAX_RESPONSE_TOKENS,
+            },
             timeout=config.AI_ASSIST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
     except httpx.HTTPError as error:
-        raise ConnectionError(f"external provider request failed: {error}") from error
+        raise _external_provider_error(error) from error
 
     return str(response.json()["choices"][0]["message"]["content"])
 
@@ -302,7 +668,7 @@ def _call_external_anthropic(
             },
             json={
                 "model": model,
-                "max_tokens": 4096,
+                "max_tokens": _MAX_RESPONSE_TOKENS,
                 "system": system_text or None,
                 "messages": conversation,
             },
@@ -310,7 +676,7 @@ def _call_external_anthropic(
         )
         response.raise_for_status()
     except httpx.HTTPError as error:
-        raise ConnectionError(f"external provider request failed: {error}") from error
+        raise _external_provider_error(error) from error
 
     data = response.json()
     return "".join(block.get("text", "") for block in data.get("content", []))
@@ -328,32 +694,183 @@ def generate_completion(messages: list[dict[str, str]]) -> str:
         the JSON proposal protocol).
 
     Raises:
-        ValueError: If the "external" provider is selected but is not
-            fully configured (base_url/model/api_key).
-        ConnectionError: If the provider could not be reached or
-            returned an error.
+        ValueError: If "local" is selected but no model has been
+            configured yet, or "external" is selected but is not fully
+            configured (base_url/model/api_key).
+        ConnectionError: If the provider (and every configured
+            fallback) could not be reached or returned an error.
+    """
+    reply, _notice = generate_completion_with_notice(messages)
+    return reply
+
+
+def generate_completion_with_notice(
+    messages: list[dict[str, str]],
+) -> tuple[str, str | None]:
+    """Like ``generate_completion``, but also reports an automatic failover.
+
+    Args:
+        messages (list[dict[str, str]]): See ``generate_completion``.
+
+    Returns:
+        tuple[str, str | None]: The reply text, and a short
+        user-facing notice if answering this call required
+        automatically switching to a fallback provider (None
+        otherwise) -- see ``_generate_external_with_failover``.
+
+    Raises:
+        ValueError: See ``generate_completion``.
+        ConnectionError: See ``generate_completion``.
     """
     raw = _load_raw_config()
 
     if raw["provider"] == "external":
-        base_url = raw.get("external_base_url") or _DEFAULT_EXTERNAL_BASE_URLS.get(
-            raw["external_provider_kind"]
+        return _generate_external_with_failover(messages, raw)
+
+    local_model = raw.get("local_model")
+
+    if not local_model:
+        raise ValueError(
+            "no local model is configured yet -- open the Assistant "
+            "Settings tab and either pick a model tag from "
+            "https://ollama.com/library to pull it (there's a Pull "
+            "button right there), or switch to an external API and "
+            "add a key."
         )
-        model = raw.get("external_model")
-        api_key = raw.get("external_api_key")
+
+    return _call_ollama(messages, local_model), None
+
+
+def _external_candidate_from_primary(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "label": None,
+        "provider_kind": raw["external_provider_kind"],
+        "base_url": raw.get("external_base_url"),
+        "model": raw.get("external_model"),
+        "api_key": raw.get("external_api_key"),
+    }
+
+
+def _generate_external_with_failover(
+    messages: list[dict[str, str]], raw: dict[str, Any]
+) -> tuple[str, str | None]:
+    """Call the active external provider, auto-promoting a fallback on 429.
+
+    Tries the primary external provider first, then each configured
+    fallback in order, stopping at the first one that doesn't come
+    back with a rate-limit/quota error (``ProviderRateLimitedError``).
+    Any other failure (bad key, bad model, network error) is raised
+    immediately without trying fallbacks -- those are configuration
+    problems the user needs to see and fix, not conditions another
+    provider would resolve.
+
+    The first fallback that succeeds is promoted to be the new primary
+    going forward (persisted), and the provider that just got
+    rate-limited is appended to the fallback list rather than
+    discarded, so it's automatically retried again once other options
+    are also exhausted, instead of being abandoned for good over what
+    may be a temporary limit.
+
+    Args:
+        messages (list[dict[str, str]]): See ``generate_completion``.
+        raw (dict[str, Any]): The full raw config, as returned by
+            ``_load_raw_config``.
+
+    Returns:
+        tuple[str, str | None]: The reply, and a notice describing the
+        switch if one happened.
+
+    Raises:
+        ValueError: If the primary external provider is not fully
+            configured.
+        ConnectionError: If every candidate failed; the error from the
+            *last* candidate tried.
+    """
+    candidates = [_external_candidate_from_primary(raw), *raw.get("fallback_profiles", [])]
+    last_error: ConnectionError | None = None
+
+    for index, candidate in enumerate(candidates):
+        base_url = candidate.get("base_url") or _DEFAULT_EXTERNAL_BASE_URLS.get(
+            candidate["provider_kind"]
+        )
+        model = candidate.get("model")
+        api_key = candidate.get("api_key")
 
         if not model or not api_key:
-            raise ValueError(
-                "external provider selected but external_model/"
-                "external_api_key are not fully configured"
-            )
+            if index == 0:
+                raise ValueError(
+                    "external provider selected but external_model/"
+                    "external_api_key are not fully configured"
+                )
+            continue  # an incompletely-configured fallback is just skipped
 
-        if raw["external_provider_kind"] == "openai":
-            return _call_external_openai(messages, model, base_url, api_key)
+        try:
+            if candidate["provider_kind"] == "openai":
+                reply = _call_external_openai(messages, model, base_url, api_key)
+            else:
+                reply = _call_external_anthropic(messages, model, base_url, api_key)
+        except ProviderRateLimitedError as error:
+            last_error = error
+            continue
 
-        return _call_external_anthropic(messages, model, base_url, api_key)
+        if index == 0:
+            return reply, None
 
-    return _call_ollama(messages, raw["local_model"])
+        previous_kind = raw["external_provider_kind"]
+        _promote_fallback_profile(raw, index)
+        notice = (
+            f"The {previous_kind} provider was rate-limited or out of "
+            f"quota, so the assistant automatically switched to "
+            f"{candidate.get('label') or candidate['provider_kind']} "
+            "for this and future requests."
+        )
+        return reply, notice
+
+    assert last_error is not None, "candidates always has at least the primary"
+    raise last_error
+
+
+def _promote_fallback_profile(raw: dict[str, Any], index: int) -> None:
+    """Make the fallback at ``candidates[index]`` the new primary provider.
+
+    The previous primary is demoted to the end of the fallback list
+    (not discarded) so it's automatically retried once other options
+    are also exhausted -- a rate limit is often temporary.
+
+    Args:
+        raw (dict[str, Any]): The full raw config (mutated in place
+            and persisted).
+        index (int): Position within ``_generate_external_with_failover``'s
+            ``candidates`` list (1-based within fallbacks, since index
+            0 is always the primary and never promoted via this path).
+    """
+    fallback_profiles = raw.get("fallback_profiles", [])
+    promoted = fallback_profiles[index - 1]
+    remaining = [*fallback_profiles[: index - 1], *fallback_profiles[index:]]
+
+    demoted_primary = {
+        "id": str(uuid.uuid4()),
+        "label": f"previous provider ({raw['external_provider_kind']})",
+        "provider_kind": raw["external_provider_kind"],
+        "base_url": raw.get("external_base_url"),
+        "model": raw.get("external_model"),
+        "api_key": raw.get("external_api_key"),
+    }
+
+    raw["external_provider_kind"] = promoted["provider_kind"]
+    raw["external_base_url"] = promoted.get("base_url")
+    raw["external_model"] = promoted["model"]
+    raw["external_api_key"] = promoted.get("api_key")
+    raw["fallback_profiles"] = [*remaining, demoted_primary]
+
+    _save_raw_config(raw)
+    logger.warning(
+        "external provider %r was rate-limited/quota-exhausted -- "
+        "automatically switched to fallback %r (%r)",
+        demoted_primary["provider_kind"],
+        promoted.get("label"),
+        promoted["provider_kind"],
+    )
 
 
 # ─── JSON proposal protocol ───
@@ -374,15 +891,62 @@ def _build_system_prompt(writing_style_profile: str | None) -> str:
     return "\n\n".join(parts)
 
 
+def _strip_wrapping_fence(text: str) -> str:
+    """Strip a single leading/trailing markdown code fence, if present."""
+    stripped = text.strip()
+    fence_match = re.match(r"^```(?:\w+)?\s*(.*?)\s*```$", stripped, re.DOTALL)
+    return fence_match.group(1) if fence_match else stripped
+
+
+def _extract_json_object(text: str) -> tuple[dict[str, Any] | None, int]:
+    """Find and parse the first top-level JSON object anywhere in ``text``.
+
+    Uses ``json.JSONDecoder.raw_decode`` rather than a regex, which
+    means it correctly finds where the JSON value *ends* even when
+    something else (a stray sentence, a content block) follows it, and
+    tolerates a model prefixing the JSON with a sentence despite being
+    told not to, by retrying from each ``{`` found in turn. Parses with
+    ``strict=False`` so a literal, unescaped newline inside a string
+    value (a common small-model mistake) doesn't fail parsing outright.
+
+    Args:
+        text (str): Candidate text, possibly containing a JSON object
+            plus other content before/after it.
+
+    Returns:
+        tuple[dict[str, Any] | None, int]: The parsed object and the
+        index in ``text`` immediately after it, or ``(None, -1)`` if no
+        JSON object could be found.
+    """
+    decoder = json.JSONDecoder(strict=False)
+    start = text.find("{")
+
+    while start != -1:
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            start = text.find("{", start + 1)
+            continue
+
+        if isinstance(obj, dict):
+            return obj, end
+
+        start = text.find("{", start + 1)
+
+    return None, -1
+
+
 def _parse_json_response(raw_text: str) -> dict[str, Any]:
     """Extract the JSON object a model returned.
 
     Tolerates a model that didn't follow the formatting instructions
-    exactly: a leading/trailing markdown code fence, or extra prose
-    around the JSON object. Falls back to treating the entire reply as
-    plain text with no proposals, rather than raising, since a small
-    local model occasionally ignoring format instructions should
-    degrade to "just a chat reply", not a hard failure.
+    exactly: a leading/trailing markdown code fence, extra prose around
+    the JSON object, or unescaped newlines inside a string value. Falls
+    back to treating the entire reply as plain text with no proposals,
+    rather than raising, since a small local model occasionally
+    ignoring format instructions should degrade to "just a chat reply",
+    not a hard failure (and definitely not raw JSON syntax shown
+    verbatim to the user).
 
     Args:
         raw_text (str): The model's raw response text.
@@ -391,32 +955,84 @@ def _parse_json_response(raw_text: str) -> dict[str, Any]:
         dict[str, Any]: Parsed with ``"reply"`` and ``"proposals"``
         keys, both defaulted if absent/unparsable.
     """
-    text = raw_text.strip()
+    parsed, _end = _extract_json_object(raw_text)
 
-    fence_match = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
-    if fence_match:
-        text = fence_match.group(1)
-
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        pass
-
-    brace_match = re.search(r"\{.*\}", text, re.DOTALL)
-    if brace_match:
-        try:
-            return json.loads(brace_match.group(0))
-        except json.JSONDecodeError:
-            pass
+    if parsed is not None:
+        return parsed
 
     return {"reply": raw_text, "proposals": []}
 
 
-def _coerce_proposals(raw_proposals: object) -> list[AssistantProposal]:
+_CONTENT_BLOCK_PATTERN = re.compile(
+    re.escape(_CONTENT_BLOCK_MARKER) + r"\s*\n(.*?)\n?" + re.escape(_CONTENT_BLOCK_MARKER),
+    re.DOTALL,
+)
+
+# Observed live: a model will often ignore the custom marker and fall
+# back to a plain markdown code fence instead (its training clearly
+# has a much stronger prior for "fenced block" than for a bespoke
+# delimiter) -- used as a fallback when no marker-delimited block is
+# found at all, not as the primary format, since real file content
+# could in principle itself contain a ``` sequence.
+_FENCED_BLOCK_PATTERN = re.compile(r"```(?:\w+)?\n?(.*?)\n?```", re.DOTALL)
+
+
+def _extract_content_blocks(text: str) -> list[str]:
+    """Pull out out-of-band file content blocks, in order.
+
+    This is how file content reaches a proposal instead of living
+    inside the JSON object: LaTeX's backslash commands make it
+    extremely easy for a model to produce JSON that looks right but
+    fails to parse (``\\end`` is not a valid JSON escape, and small
+    models essentially never remember to double every backslash), so
+    content travels as plain, unescaped, out-of-band text instead.
+
+    Tries the documented ``---CONTENT---`` marker first; if the model
+    ignored that instruction and used an ordinary markdown code fence
+    instead (a common substitution in practice), falls back to that.
+
+    Args:
+        text (str): Text to search (typically everything *after* the
+            JSON object in a model's response).
+
+    Returns:
+        list[str]: Block contents, in the order they appeared.
+    """
+    marker_blocks = [
+        match.group(1) for match in _CONTENT_BLOCK_PATTERN.finditer(text)
+    ]
+
+    if marker_blocks:
+        return [_strip_wrapping_fence(block) for block in marker_blocks]
+
+    return [match.group(1) for match in _FENCED_BLOCK_PATTERN.finditer(text)]
+
+
+def _coerce_proposals(
+    raw_proposals: object, content_blocks: list[str] | None = None
+) -> list[AssistantProposal]:
+    """Validate and build proposals, attaching out-of-band content.
+
+    Args:
+        raw_proposals (object): The (untrusted) ``"proposals"`` value
+            from the model's parsed JSON.
+        content_blocks (list[str] | None): Content blocks extracted
+            from the text following the JSON (see
+            ``_extract_content_blocks``), assigned in order to
+            proposals that need content and didn't already get an
+            (unreliable) inline ``"content"`` field from the model.
+
+    Returns:
+        list[AssistantProposal]: Only entries with a recognized
+        ``action`` and a ``path`` are kept.
+    """
     if not isinstance(raw_proposals, list):
         return []
 
+    blocks = list(content_blocks or [])
+    next_block_index = 0
     proposals: list[AssistantProposal] = []
+
     for raw in raw_proposals:
         if not isinstance(raw, dict):
             continue
@@ -427,6 +1043,25 @@ def _coerce_proposals(raw_proposals: object) -> list[AssistantProposal]:
         if action not in _PROPOSAL_ACTIONS or not path:
             continue
 
+        content = raw.get("content")
+        is_dir = action == "create_entry" and raw.get("entry_type") == "dir"
+        needs_content = action in ("write_file", "create_entry") and not is_dir
+
+        if not content and needs_content and next_block_index < len(blocks):
+            content = blocks[next_block_index]
+            next_block_index += 1
+
+        if needs_content and not content:
+            # A write_file/create_entry(file) proposal with no content
+            # anywhere -- not an inline field, not an out-of-band block
+            # -- can never be applied; services.project_files.write_file
+            # requires it, and apply_proposal() raises on a missing
+            # one. Dropping it here (rather than surfacing it and
+            # letting Accept fail with a 400) is the general case of
+            # the same gate _select_fix_proposal already applies for
+            # fix_compile_error specifically.
+            continue
+
         proposals.append(
             AssistantProposal(
                 id=str(uuid.uuid4()),
@@ -434,7 +1069,7 @@ def _coerce_proposals(raw_proposals: object) -> list[AssistantProposal]:
                 path=path,
                 new_path=raw.get("new_path"),
                 entry_type=raw.get("entry_type"),
-                content=raw.get("content"),
+                content=content,
                 description=str(raw.get("description") or f"{action} {path}"),
             )
         )
@@ -442,18 +1077,51 @@ def _coerce_proposals(raw_proposals: object) -> list[AssistantProposal]:
     return proposals
 
 
+def _parse_model_response(raw_text: str) -> AssistantChatResult:
+    """Parse a model's full two-part response into reply + proposals.
+
+    Args:
+        raw_text (str): The model's raw response text.
+
+    Returns:
+        AssistantChatResult: The reply text and any proposals, with
+        content already attached from any out-of-band blocks.
+    """
+    parsed, end = _extract_json_object(raw_text)
+
+    if parsed is None:
+        return AssistantChatResult(reply=raw_text, proposals=[])
+
+    remainder = raw_text[end:]
+    stripped_remainder = remainder.lstrip()
+
+    if stripped_remainder.startswith("```"):
+        # A lone leftover closing fence from a ```json ... ``` wrapper
+        # around the JSON itself -- _extract_json_object only consumed
+        # the JSON *value*, not that wrapper's closing marker. Drop it
+        # so it isn't mistaken for a content block's opening fence.
+        remainder = stripped_remainder[3:]
+
+    content_blocks = _extract_content_blocks(remainder)
+
+    return AssistantChatResult(
+        reply=str(parsed.get("reply", raw_text)),
+        proposals=_coerce_proposals(parsed.get("proposals"), content_blocks),
+    )
+
+
 def _run_prompt(system_prompt: str, user_content: str) -> AssistantChatResult:
     messages = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_content},
     ]
-    raw_reply = generate_completion(messages)
-    parsed = _parse_json_response(raw_reply)
+    raw_reply, notice = generate_completion_with_notice(messages)
+    result = _parse_model_response(raw_reply)
 
-    return AssistantChatResult(
-        reply=str(parsed.get("reply", raw_reply)),
-        proposals=_coerce_proposals(parsed.get("proposals")),
-    )
+    if notice:
+        result = result.model_copy(update={"provider_notice": notice})
+
+    return result
 
 
 # ─── Assistant actions ───
@@ -495,13 +1163,13 @@ def chat(
 
     context_messages.extend({"role": m.role, "content": m.content} for m in messages)
 
-    raw_reply = generate_completion(context_messages)
-    parsed = _parse_json_response(raw_reply)
+    raw_reply, notice = generate_completion_with_notice(context_messages)
+    result = _parse_model_response(raw_reply)
 
-    return AssistantChatResult(
-        reply=str(parsed.get("reply", raw_reply)),
-        proposals=_coerce_proposals(parsed.get("proposals")),
-    )
+    if notice:
+        result = result.model_copy(update={"provider_notice": notice})
+
+    return result
 
 
 def suggest_improvements(project_id: str, main_file: str) -> AssistantChatResult:
@@ -555,21 +1223,102 @@ def fix_compile_error(project_id: str, log: str, main_file: str) -> AiAssistResu
     """
     content = project_files.read_file(project_id, main_file)
     style = get_config().writing_style_profile
+    system_prompt = _build_system_prompt(style)
 
-    result = _run_prompt(
-        _build_system_prompt(style),
+    user_message = (
         f"Compiling {main_file!r} failed. Here is the compile log:\n\n"
         f"{log}\n\nHere is the current content of {main_file!r}:\n\n"
         f"{content}\n\nExplain what's wrong in plain language, and if "
         "you can fix it, propose exactly one write_file change with "
         "the corrected content. Keep the fix as small and targeted as "
-        "possible -- don't remove content unrelated to the error.",
+        "possible -- don't remove content unrelated to the error."
     )
 
+    result = _run_prompt(system_prompt, user_message)
+    proposal = _select_fix_proposal(result.proposals, main_file, content)
+
+    if proposal is None:
+        # Observed live: small/medium models frequently describe the
+        # fix in the "reply" text ("remove the broken line") without
+        # actually including the content block the fix needs -- one
+        # firm, specific retry measurably helps, and the cost of a
+        # second call only applies in this already-failing case.
+        retry_result = _run_prompt(
+            system_prompt,
+            user_message
+            + "\n\nYour previous answer did not include a usable "
+            f"{_CONTENT_BLOCK_MARKER} block with the complete, "
+            "corrected file content. Try again -- the proposals list "
+            "must have exactly one write_file entry, and it must be "
+            f"followed by a {_CONTENT_BLOCK_MARKER} block containing "
+            "the full corrected content, not just a description of "
+            "the change.",
+        )
+        retry_proposal = _select_fix_proposal(retry_result.proposals, main_file, content)
+
+        if retry_proposal is not None:
+            return AiAssistResult(
+                suggestion=retry_result.reply,
+                proposal=retry_proposal,
+                provider_notice=retry_result.provider_notice,
+            )
+
     return AiAssistResult(
-        suggestion=result.reply,
-        proposal=result.proposals[0] if result.proposals else None,
+        suggestion=result.reply, proposal=proposal, provider_notice=result.provider_notice
     )
+
+
+def _select_fix_proposal(
+    proposals: list[AssistantProposal],
+    main_file: str,
+    original_content: str,
+) -> AssistantProposal | None:
+    """Pick (and correct) the proposal to surface for a compile-error fix.
+
+    Small models frequently hallucinate the wrong path for this
+    request (even an absolute path well outside the project) even
+    though the target file is already known deterministically here --
+    so the path is corrected rather than trusted. A proposal that
+    isn't a ``write_file``, or whose content looks like it deletes most
+    of the file rather than making a targeted fix (the non-destructive
+    editing this feature is required to do), is dropped instead of
+    surfaced, rather than relying on the model to follow that
+    instruction on its own.
+
+    Args:
+        proposals (list[AssistantProposal]): Proposals returned
+            alongside the model's reply.
+        main_file (str): The file that actually failed to compile.
+        original_content (str): Its current content, for the
+            "not too much got removed" sanity check.
+
+    Returns:
+        AssistantProposal | None: A corrected, trustworthy proposal, or
+        None if nothing usable was offered.
+    """
+    for proposal in proposals:
+        if proposal.action != "write_file" or not proposal.content:
+            continue
+
+        if (
+            len(original_content) > 40
+            and len(proposal.content) < len(original_content) * 0.3
+        ):
+            continue
+
+        if "\\" in original_content and "\\" not in proposal.content:
+            # The original is clearly LaTeX (uses commands) but the
+            # proposed replacement has no LaTeX commands at all -- a
+            # reliable sign the model echoed prose/instructions back
+            # instead of producing an actual document.
+            continue
+
+        if proposal.path != main_file:
+            proposal = proposal.model_copy(update={"path": main_file})
+
+        return proposal
+
+    return None
 
 
 def learn_writing_style(samples: list[str]) -> str:

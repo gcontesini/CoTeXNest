@@ -11,8 +11,8 @@ to open them.
 From top to bottom, the window is:
 
 1. **Menu bar** -- File and Help dropdown menus.
-2. **Top bar** -- project selector, New/Delete Project, Compile, Save
-   Version, History, and Packages.
+2. **Top bar** -- project selector, New/Delete Project, Refresh, Save
+   Version, History, Packages, and Assistant.
 3. **Main area** -- the file browser sidebar on the left, and the
    editor/preview split on the right.
 4. **Status bar** -- character, word, and line counts for the file
@@ -77,9 +77,10 @@ below is client-side behavior on top of that API.
   autosave -- that would make a large document feel sluggish to edit.
   Instead, a recompile is scheduled 15 seconds after your last edit,
   and reset every time you make a new edit, so it only actually runs
-  once typing settles. The **Compile** button in the top bar always
+  once typing settles. The **Refresh** button in the top bar always
   compiles immediately, bypassing this delay.
-- The divider between the editor and preview panes is draggable.
+- The divider between the editor and preview panes is draggable, and so
+  is the one above the assistant dock (drag it to resize the dock).
 
 ## Status bar
 

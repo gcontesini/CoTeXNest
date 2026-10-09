@@ -237,3 +237,31 @@ def test_delete_unknown_project_returns_404(client: TestClient) -> None:
 def test_read_unknown_project_returns_404(client: TestClient) -> None:
     response = client.get("/api/projects/does-not-exist/files/main.tex")
     assert response.status_code == 404
+
+
+def test_create_entry_permission_denied_returns_actionable_500(
+    client: TestClient,
+) -> None:
+    # Reproduces a real-world failure mode: a project directory owned
+    # by a different user (e.g. created via Docker, now accessed via
+    # `just dev` as a plain host user) raises PermissionError, which
+    # must become a clear, actionable 500 -- not an unhandled crash.
+    project_id = client.post(
+        "/api/projects", json={"name": "Read Only Project"}
+    ).json()["id"]
+    project_dir = config.WORKSPACE_ROOT / project_id
+
+    original_mode = project_dir.stat().st_mode
+    project_dir.chmod(0o555)
+
+    try:
+        response = client.post(
+            f"/api/projects/{project_id}/files",
+            json={"path": "images", "type": "dir"},
+        )
+    finally:
+        project_dir.chmod(original_mode)
+
+    assert response.status_code == 500
+    assert "Filesystem error" in response.json()["detail"]
+    assert "chown" in response.json()["detail"]

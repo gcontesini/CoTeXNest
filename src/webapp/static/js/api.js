@@ -251,8 +251,34 @@ export async function listAssistantModels() {
   return request("GET", "/api/assistant/models");
 }
 
+export async function pullAssistantModel(model) {
+  return request("POST", "/api/assistant/models/pull", { model });
+}
+
+export async function getAssistantModelPullStatus(model) {
+  return request(
+    "GET",
+    `/api/assistant/models/pull-status?model=${encodeURIComponent(model)}`,
+  );
+}
+
+export async function addAssistantFallbackProvider(profile) {
+  return request("POST", "/api/assistant/fallback-profiles", profile);
+}
+
+export async function removeAssistantFallbackProvider(profileId) {
+  return request(
+    "DELETE",
+    `/api/assistant/fallback-profiles/${encodeURIComponent(profileId)}`,
+  );
+}
+
 export async function learnWritingStyle(samples) {
   return request("POST", "/api/assistant/writing-style", { samples });
+}
+
+export async function deleteWritingStyle() {
+  return request("DELETE", "/api/assistant/writing-style");
 }
 
 export async function assistantChat(projectId, messages, mainFile) {

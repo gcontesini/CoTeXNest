@@ -86,11 +86,11 @@
 
       <span class="spacer"></span>
 
-      <button class="btn btn-primary" id="btn-compile" type="button">Compile</button>
-      <button class="btn" id="btn-save-version" type="button">Save Version</button>
+      <button class="btn btn-primary" id="btn-compile" type="button">Refresh</button>
+      <button class="btn" id="btn-assistant" type="button">Assistant</button>
       <button class="btn" id="btn-history" type="button">History</button>
       <button class="btn" id="btn-packages" type="button">Packages</button>
-      <button class="btn" id="btn-assistant" type="button">Assistant</button>
+      <button class="btn" id="btn-save-version" type="button">Save Version</button>
     </header>
 
     <!-- ─── Main area: sidebar + split workspace ─── -->
@@ -130,7 +130,7 @@
             <span id="compile-status"></span>
           </div>
           <div id="preview-container">
-            <p class="preview-empty">Compile your document to see the PDF here.</p>
+            <p class="preview-empty">Click Refresh to compile your document and see the PDF here.</p>
           </div>
         </section>
       </main>
@@ -138,6 +138,7 @@
 
     <!-- ─── AI assistant panel (bottom dock) ─── -->
     <section class="assistant-dock hidden" id="assistant-dock" aria-label="AI assistant">
+      <div class="assistant-resize-handle" id="assistant-resize-handle" title="Drag to resize"></div>
       <div class="assistant-dock-header">
         <div class="assistant-tabs">
           <button class="assistant-tab active" id="tab-assistant-chat" type="button">Chat</button>
