@@ -93,10 +93,11 @@ export async function listProjects() {
   return request("GET", "/api/projects");
 }
 
-export async function createProject(name, templateId) {
+export async function createProject(name, templateId, remoteUrl) {
   return request("POST", "/api/projects", {
     name,
     template_id: templateId ?? null,
+    remote_url: remoteUrl ?? null,
   });
 }
 
@@ -149,6 +150,50 @@ export async function renameEntry(projectId, path, newPath) {
   );
 }
 
+/**
+ * Upload a real OS file (e.g. dragged in from the desktop) to an exact
+ * destination path, overwriting anything already there.
+ *
+ * Separate from `request()` because this needs a `multipart/form-data`
+ * body (a `File`/`Blob`), not JSON.
+ *
+ * @param {string} projectId
+ * @param {string} path - Destination, relative to the project root.
+ * @param {File|Blob} file - The file's contents.
+ * @returns {Promise<{path: string, size_bytes: number, content_type: string|null}>}
+ * @throws {Error} On a network failure or non-2xx response.
+ */
+export async function uploadFile(projectId, path, file) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const url = `/api/projects/${encodeURIComponent(projectId)}/files/${encodeFilePath(path)}/upload`;
+  let response;
+
+  try {
+    response = await fetch(url, { method: "POST", body: formData });
+  } catch (networkError) {
+    throw new Error(`Network error uploading "${path}": ${networkError.message}`);
+  }
+
+  if (!response.ok) {
+    let detail = "";
+
+    try {
+      detail = await response.text();
+    } catch {
+      detail = "";
+    }
+
+    throw new Error(
+      `POST ${url} failed with status ${response.status} ` +
+        `${response.statusText}${detail ? `: ${detail}` : ""}`,
+    );
+  }
+
+  return response.json();
+}
+
 // ─── Compilation ───
 
 export async function compile(projectId, mainFile) {
@@ -181,6 +226,14 @@ export async function getDiff(projectId, commitId) {
     "GET",
     `/api/projects/${encodeURIComponent(projectId)}/history/` +
       `${encodeURIComponent(commitId)}/diff`,
+  );
+}
+
+export async function syncProject(projectId, commitMessage, author) {
+  return request(
+    "POST",
+    `/api/projects/${encodeURIComponent(projectId)}/sync`,
+    { commit_message: commitMessage ?? null, author: author ?? "anonymous" },
   );
 }
 
@@ -281,12 +334,45 @@ export async function deleteWritingStyle() {
   return request("DELETE", "/api/assistant/writing-style");
 }
 
+const ASSISTANT_JOB_POLL_INTERVAL_MS = 1500;
+
+/**
+ * Poll a background assistant job (see services/assistant.py's job
+ * runner) until it's done, returning its result.
+ *
+ * A slow provider call -- local or external -- can legitimately take
+ * longer than any fixed HTTP timeout reasonable to wait on directly
+ * (observed live), so chat and fix-compile-error requests start a
+ * background job and this polls for the result instead of a single
+ * request blocking until it's ready. There's no poll-count ceiling
+ * here: the job itself is time-bounded server-side by the provider
+ * call's own timeout, so this can't poll forever in practice.
+ *
+ * @param {string} pollPath - Same-origin path to poll, e.g.
+ *   `/api/assistant/jobs/chat/<job_id>`.
+ * @returns {Promise<any>} The job's `result` once `status` is `"done"`.
+ * @throws {Error} If a poll request itself fails (e.g. the job errored
+ *   -- the backend reports that as a non-2xx on the poll endpoint).
+ */
+async function pollJobUntilDone(pollPath) {
+  for (;;) {
+    const status = await request("GET", pollPath);
+
+    if (status.status === "done") {
+      return status.result;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, ASSISTANT_JOB_POLL_INTERVAL_MS));
+  }
+}
+
 export async function assistantChat(projectId, messages, mainFile) {
-  return request(
+  const { job_id } = await request(
     "POST",
-    `/api/projects/${encodeURIComponent(projectId)}/assistant/chat`,
+    `/api/projects/${encodeURIComponent(projectId)}/assistant/chat/start`,
     { messages, main_file: mainFile ?? null },
   );
+  return pollJobUntilDone(`/api/assistant/jobs/chat/${encodeURIComponent(job_id)}`);
 }
 
 export async function assistantSuggest(projectId, mainFile) {
@@ -298,10 +384,13 @@ export async function assistantSuggest(projectId, mainFile) {
 }
 
 export async function assistantFixCompileError(projectId, log, mainFile) {
-  return request(
+  const { job_id } = await request(
     "POST",
-    `/api/projects/${encodeURIComponent(projectId)}/assistant/fix-compile-error`,
+    `/api/projects/${encodeURIComponent(projectId)}/assistant/fix-compile-error/start`,
     { log, main_file: mainFile },
+  );
+  return pollJobUntilDone(
+    `/api/assistant/jobs/fix-compile-error/${encodeURIComponent(job_id)}`,
   );
 }
 

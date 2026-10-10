@@ -1,0 +1,20 @@
+dictionary-en.txt is the "american-english" word list from the Debian
+"wamerican" package, itself derived from SCOWL (Spell Checker Oriented
+Word Lists), maintained by Kevin Atkinson <kevina@users.sourceforge.net>.
+Source: http://wordlist.sourceforge.net/
+
+The collective work is Copyright 2000-2011 by Kevin Atkinson as well as
+the other copyright holders listed in SCOWL's own README.
+
+Permission to use, copy, modify, distribute and sell these word lists,
+the associated scripts, the output created from the scripts, and its
+documentation for any purpose is hereby granted without fee, provided
+that the above copyright notice appears in all copies and that both
+that copyright notice and this permission notice appear in supporting
+documentation. Kevin Atkinson makes no representations about the
+suitability of this array for any purpose. It is provided "as is"
+without express or implied warranty.
+
+This notice is retained here, alongside the file it covers, to satisfy
+that license term -- see /usr/share/doc/wamerican/copyright on any
+Debian/Ubuntu system for the fuller original text.

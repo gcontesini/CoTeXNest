@@ -40,7 +40,9 @@ import json
 import logging
 import re
 import threading
+import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -1361,6 +1363,48 @@ def learn_writing_style(samples: list[str]) -> str:
     return profile
 
 
+def generate_commit_message(diff_text: str) -> str:
+    """Ask the assistant to summarize a diff as a one-line commit message.
+
+    Used by the "Sync Changes" feature (``services.git_history``) to
+    write a commit message for you when there are uncommitted changes
+    and you didn't type one yourself; if this fails (no provider
+    configured, unreachable), the caller falls back to asking you
+    directly instead.
+
+    Args:
+        diff_text (str): Unified diff of the changes to summarize.
+
+    Returns:
+        str: A single-line, imperative-mood commit message. Falls back
+        to a generic message only if the model's own reply is somehow
+        empty after cleanup -- a genuine provider failure still raises,
+        rather than silently returning this fallback.
+
+    Raises:
+        ValueError: If the provider is misconfigured.
+        ConnectionError: If the provider could not be reached.
+    """
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You write git commit messages. Given a diff, reply "
+                "with ONLY a single-line, imperative-mood commit "
+                "message summarizing it (e.g. 'Fix typo in abstract', "
+                "'Add methodology section') -- no quotes, no "
+                "explanation, no markdown, nothing else."
+            ),
+        },
+        {"role": "user", "content": diff_text},
+    ]
+
+    raw_reply = generate_completion(messages).strip()
+    cleaned = _strip_wrapping_fence(raw_reply).strip().strip("\"'")
+    first_line = cleaned.splitlines()[0].strip() if cleaned else ""
+    return first_line or "Update project files"
+
+
 def apply_proposal(
     project_id: str, proposal: AssistantProposal, author: str
 ) -> str:
@@ -1411,3 +1455,117 @@ def apply_proposal(
         author=author,
     )
     return commit.id
+
+
+# ─── Background job polling (chat / fix-compile-error) ───
+#
+# Why this exists: a provider call -- local or external -- can
+# legitimately take longer than any fixed timeout short enough to
+# still be reasonable to block an HTTP request on. Observed live: a
+# CPU-only local model under load, and separately an external
+# provider, each exceeded even a 180-second synchronous wait for a
+# single realistic fix_compile_error call (which itself can make two
+# sequential provider calls, via its retry). Rather than raising that
+# ceiling further -- which only delays, not prevents, the same failure
+# -- chat() and fix_compile_error() run on a background thread here;
+# the caller polls get_assistant_job() for the result instead of
+# waiting on the original request. This removes the hard wall-clock
+# ceiling entirely rather than just making it more generous.
+
+_assistant_job_lock = threading.Lock()
+_assistant_jobs: dict[str, dict[str, Any]] = {}
+
+# How long a finished (done/error) job's result stays available to
+# poll for, before being pruned. This process can run indefinitely, so
+# without this, _assistant_jobs would grow without bound over a
+# long-running deployment; an hour is far longer than any client would
+# plausibly keep polling for one answer.
+_ASSISTANT_JOB_TTL_SECONDS = 3600
+
+
+def _prune_old_assistant_jobs() -> None:
+    cutoff = time.monotonic() - _ASSISTANT_JOB_TTL_SECONDS
+    stale_ids = [
+        job_id
+        for job_id, job in _assistant_jobs.items()
+        if job["status"] != "running" and job["started_at"] < cutoff
+    ]
+    for job_id in stale_ids:
+        del _assistant_jobs[job_id]
+
+
+def _start_assistant_job(fn: Callable[[], Any]) -> str:
+    """Run ``fn`` on a background thread; return an id to poll for its result.
+
+    Args:
+        fn (Callable[[], Any]): Zero-argument callable to run. Its
+            return value (typically an ``AssistantChatResult`` or
+            ``AiAssistResult``) becomes the job's result; any exception
+            it raises is captured (by type name and message) rather
+            than propagated, for ``get_assistant_job`` to report.
+
+    Returns:
+        str: Job id to pass to ``get_assistant_job``.
+    """
+    job_id = str(uuid.uuid4())
+
+    with _assistant_job_lock:
+        _assistant_jobs[job_id] = {
+            "status": "running",
+            "result": None,
+            "error": None,
+            "error_type": None,
+            "started_at": time.monotonic(),
+        }
+        _prune_old_assistant_jobs()
+
+    def run() -> None:
+        try:
+            result = fn()
+        except Exception as exc:  # noqa: BLE001 -- surfaced via polling, not raised
+            logger.warning("assistant job %s failed: %s", job_id, exc)
+            with _assistant_job_lock:
+                _assistant_jobs[job_id]["status"] = "error"
+                _assistant_jobs[job_id]["error"] = str(exc)
+                _assistant_jobs[job_id]["error_type"] = type(exc).__name__
+            return
+
+        with _assistant_job_lock:
+            _assistant_jobs[job_id]["status"] = "done"
+            _assistant_jobs[job_id]["result"] = result
+
+    threading.Thread(target=run, daemon=True).start()
+    return job_id
+
+
+def get_assistant_job(job_id: str) -> dict[str, Any] | None:
+    """Look up a background job's current state.
+
+    Args:
+        job_id (str): Id previously returned by ``_start_assistant_job``.
+
+    Returns:
+        dict[str, Any] | None: A copy of the job's state (``status``,
+        ``result``, ``error``, ``error_type``), or None if the id is
+        unknown or has expired (see ``_ASSISTANT_JOB_TTL_SECONDS``).
+    """
+    with _assistant_job_lock:
+        job = _assistant_jobs.get(job_id)
+        return dict(job) if job is not None else None
+
+
+def start_chat_job(
+    project_id: str,
+    messages: list[AssistantChatMessage],
+    main_file: str | None,
+) -> str:
+    """Start ``chat`` as a background job. See ``_start_assistant_job``."""
+    return _start_assistant_job(lambda: chat(project_id, messages, main_file))
+
+
+def start_fix_compile_error_job(project_id: str, log: str, main_file: str) -> str:
+    """Start ``fix_compile_error`` as a background job.
+
+    See ``_start_assistant_job``.
+    """
+    return _start_assistant_job(lambda: fix_compile_error(project_id, log, main_file))

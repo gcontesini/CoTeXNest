@@ -40,30 +40,57 @@ import { createHistoryPanel } from "./history-panel.js";
 import { createPackagesPanel } from "./packages-panel.js";
 import { createFileTree } from "./file-tree.js";
 import { createAssistantPanel } from "./assistant-panel.js";
+import {
+  applyAppearanceSettings,
+  getEditorSettings,
+  createSettingsModal,
+} from "./settings-modal.js";
+
+// Applied as early as possible (before the project list even loads)
+// to avoid a flash of the wrong theme/font on page load.
+applyAppearanceSettings();
 
 // ─── DOM references ───
 
 const projectSelect = document.getElementById("project-select");
 const btnNewProject = document.getElementById("btn-new-project");
-const btnDeleteProject = document.getElementById("btn-delete-project");
 const btnCompile = document.getElementById("btn-compile");
 const btnSaveVersion = document.getElementById("btn-save-version");
 const btnHistory = document.getElementById("btn-history");
-const btnPackages = document.getElementById("btn-packages");
+const menuPackagesTrigger = document.getElementById("menu-packages-trigger");
+const menuSettingsTrigger = document.getElementById("menu-settings-trigger");
+const settingsDialog = document.getElementById("settings-dialog");
+const settingsPanelBody = document.getElementById("settings-panel-body");
+const settingsDialogTitle = document.getElementById("settings-dialog-title");
+const btnCloseSettings = document.getElementById("btn-close-settings");
+const btnSyncChanges = document.getElementById("btn-sync-changes");
+const btnLogFiles = document.getElementById("btn-log-files");
+
+const syncCommitMessageDialog = document.getElementById("sync-commit-message-dialog");
+const syncCommitMessageForm = document.getElementById("sync-commit-message-form");
+const syncCommitMessageInput = document.getElementById("sync-commit-message-input");
+const syncChangedFilesList = document.getElementById("sync-changed-files-list");
+const btnCancelSyncCommitMessage = document.getElementById(
+  "btn-cancel-sync-commit-message",
+);
 
 const sidebar = document.getElementById("sidebar");
 const btnCollapseSidebar = document.getElementById("btn-collapse-sidebar");
 const fileTreeContainer = document.getElementById("file-tree");
+const fileSearchRow = document.getElementById("file-search-row");
 const fileSearchInput = document.getElementById("file-search");
+const btnToggleFileSearch = document.getElementById("btn-toggle-file-search");
 const btnNewFileRoot = document.getElementById("btn-new-file-root");
 const btnNewFolderRoot = document.getElementById("btn-new-folder-root");
 
 const editorContainer = document.getElementById("editor-container");
 const currentFileLabel = document.getElementById("current-file-label");
 const saveStatus = document.getElementById("save-status");
+const btnCollapseEditorPane = document.getElementById("btn-collapse-editor-pane");
 
 const previewContainer = document.getElementById("preview-container");
 const compileStatus = document.getElementById("compile-status");
+const btnCollapsePreviewPane = document.getElementById("btn-collapse-preview-pane");
 
 const paneDivider = document.getElementById("pane-divider");
 const editorPane = document.getElementById("editor-pane");
@@ -76,10 +103,16 @@ const btnCloseHistory = document.getElementById("btn-close-history");
 const packagesPanelEl = document.getElementById("packages-panel");
 const packagesPanelBody = document.getElementById("packages-panel-body");
 const btnClosePackages = document.getElementById("btn-close-packages");
+const logFilesPanelEl = document.getElementById("log-files-panel");
+const logFilesPanelBody = document.getElementById("log-files-panel-body");
+const btnCloseLogFiles = document.getElementById("btn-close-log-files");
+const btnClearLogFiles = document.getElementById("btn-clear-log-files");
 
 const btnAssistant = document.getElementById("btn-assistant");
 const assistantDock = document.getElementById("assistant-dock");
 const btnCloseAssistant = document.getElementById("btn-close-assistant");
+const btnMinimizeAssistant = document.getElementById("btn-minimize-assistant");
+const btnMaximizeAssistant = document.getElementById("btn-maximize-assistant");
 const tabAssistantChat = document.getElementById("tab-assistant-chat");
 const tabAssistantSettings = document.getElementById("tab-assistant-settings");
 const assistantChatView = document.getElementById("assistant-chat-view");
@@ -92,6 +125,7 @@ const newProjectDialog = document.getElementById("new-project-dialog");
 const newProjectForm = document.getElementById("new-project-form");
 const newProjectNameInput = document.getElementById("new-project-name");
 const newProjectTemplateSelect = document.getElementById("new-project-template");
+const newProjectRemoteUrlInput = document.getElementById("new-project-remote-url");
 const btnCancelNewProject = document.getElementById("btn-cancel-new-project");
 
 const deleteProjectDialog = document.getElementById("delete-project-dialog");
@@ -247,6 +281,7 @@ const assistantPanel = createAssistantPanel({
   getCurrentFilePath: () => currentFilePath,
   getCurrentEditorContent: () => (editor ? editor.getValue() : null),
   onProposalApplied: (proposal) => handleAssistantProposalApplied(proposal),
+  onError: (message) => logEntry("assistant", message),
 });
 
 /**
@@ -292,6 +327,63 @@ btnCloseAssistant.addEventListener("click", () => {
 });
 tabAssistantChat.addEventListener("click", () => showAssistantTab("chat"));
 tabAssistantSettings.addEventListener("click", () => showAssistantTab("settings"));
+
+// ─── Settings dialog (General/Editor/AI Assistant/Dictionary) ───
+
+const settingsModal = createSettingsModal({
+  dialogEl: settingsDialog,
+  bodyEl: settingsPanelBody,
+  titleEl: settingsDialogTitle,
+  getEditor: () => editor,
+  notify,
+  onOpenAssistantSettings: () => {
+    assistantDock.classList.remove("hidden");
+    showAssistantTab("settings");
+  },
+});
+
+menuSettingsTrigger.addEventListener("click", () => settingsModal.open());
+btnCloseSettings.addEventListener("click", () => settingsDialog.close());
+
+// ─── Assistant dock minimize/maximize ───
+
+const ASSISTANT_DOCK_DEFAULT_HEIGHT = "320px";
+const ASSISTANT_DOCK_MINIMIZED_HEIGHT = "2.75rem";
+
+// The height to go back to when un-minimizing/un-maximizing -- whatever
+// it was before (including a size the user set by dragging the resize
+// handle), not always the default.
+let assistantDockRestoreHeight = null;
+
+function setAssistantDockMode(mode) {
+  const isMinimized = assistantDock.classList.contains("minimized");
+  const isMaximized = assistantDock.classList.contains("maximized");
+  const alreadyInMode = (mode === "minimized" && isMinimized) || (mode === "maximized" && isMaximized);
+
+  assistantDock.classList.remove("minimized", "maximized");
+
+  if (alreadyInMode) {
+    assistantDock.style.height = assistantDockRestoreHeight || ASSISTANT_DOCK_DEFAULT_HEIGHT;
+    assistantDockRestoreHeight = null;
+    return;
+  }
+
+  if (!isMinimized && !isMaximized) {
+    assistantDockRestoreHeight =
+      assistantDock.style.height || `${assistantDock.getBoundingClientRect().height}px`;
+  }
+
+  if (mode === "minimized") {
+    assistantDock.classList.add("minimized");
+    assistantDock.style.height = ASSISTANT_DOCK_MINIMIZED_HEIGHT;
+  } else {
+    assistantDock.classList.add("maximized");
+    assistantDock.style.height = `${window.innerHeight * 0.85}px`;
+  }
+}
+
+btnMinimizeAssistant.addEventListener("click", () => setAssistantDockMode("minimized"));
+btnMaximizeAssistant.addEventListener("click", () => setAssistantDockMode("maximized"));
 
 // ─── File tree ───
 
@@ -354,6 +446,17 @@ fileSearchInput.addEventListener("input", () => {
   fileTree.setSearchQuery(fileSearchInput.value);
 });
 
+btnToggleFileSearch.addEventListener("click", () => {
+  const isHidden = fileSearchRow.classList.toggle("hidden");
+
+  if (isHidden) {
+    fileSearchInput.value = "";
+    fileTree.setSearchQuery("");
+  } else {
+    fileSearchInput.focus();
+  }
+});
+
 btnNewFileRoot.addEventListener("click", () => {
   if (!currentProjectId) {
     notify("Open a project before creating a file.", "error");
@@ -372,14 +475,83 @@ btnNewFolderRoot.addEventListener("click", () => {
   fileTree.startCreateAtRoot("dir");
 });
 
+// ─── Log Files (session-only record of compile + assistant errors) ───
+
+const LOG_FILES_MAX_ENTRIES = 200;
+
+/** @type {Array<{timestamp: number, source: "compile"|"assistant", message: string}>} */
+let errorLogEntries = [];
+
+/**
+ * Record a compile or assistant error for the Log Files panel.
+ *
+ * This is intentionally session-only (an in-memory array, not
+ * persisted) -- it's a diagnostic aid for "what just went wrong while
+ * I was working", not project state, so it doesn't need a backend
+ * endpoint or to survive a page reload.
+ *
+ * @param {"compile"|"assistant"} source
+ * @param {string} message
+ */
+function logEntry(source, message) {
+  errorLogEntries.unshift({ timestamp: Date.now(), source, message });
+
+  if (errorLogEntries.length > LOG_FILES_MAX_ENTRIES) {
+    errorLogEntries.length = LOG_FILES_MAX_ENTRIES;
+  }
+
+  if (logFilesPanelEl.classList.contains("open")) {
+    renderLogFiles();
+  }
+}
+
+function renderLogFiles() {
+  logFilesPanelBody.replaceChildren();
+
+  if (errorLogEntries.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "empty-state";
+    empty.textContent = "No compilation or assistant errors yet this session.";
+    logFilesPanelBody.appendChild(empty);
+    return;
+  }
+
+  for (const entry of errorLogEntries) {
+    const row = document.createElement("div");
+    row.className = `log-entry log-entry-${entry.source}`;
+
+    const meta = document.createElement("div");
+    meta.className = "log-entry-meta";
+    const badge = document.createElement("span");
+    badge.className = "log-entry-badge";
+    badge.textContent = entry.source === "compile" ? "Compile" : "Assistant";
+    const time = document.createElement("span");
+    time.textContent = new Date(entry.timestamp).toLocaleTimeString();
+    meta.append(badge, time);
+
+    const message = document.createElement("pre");
+    message.className = "log-entry-message";
+    message.textContent = entry.message;
+
+    row.append(meta, message);
+    logFilesPanelBody.appendChild(row);
+  }
+}
+
+btnClearLogFiles.addEventListener("click", () => {
+  errorLogEntries = [];
+  renderLogFiles();
+});
+
 function closeAllPanels() {
   historyPanelEl.classList.remove("open");
   packagesPanelEl.classList.remove("open");
+  logFilesPanelEl.classList.remove("open");
   panelOverlay.classList.remove("open");
 }
 
 async function openHistoryPanel({ focusComposer = false } = {}) {
-  packagesPanelEl.classList.remove("open");
+  closeAllPanels();
   historyPanelEl.classList.add("open");
   panelOverlay.classList.add("open");
   await historyPanel.refresh();
@@ -391,18 +563,109 @@ async function openHistoryPanel({ focusComposer = false } = {}) {
 }
 
 async function openPackagesPanel() {
-  historyPanelEl.classList.remove("open");
+  closeAllPanels();
   packagesPanelEl.classList.add("open");
   panelOverlay.classList.add("open");
   await packagesPanel.refresh();
 }
 
+function openLogFilesPanel() {
+  closeAllPanels();
+  logFilesPanelEl.classList.add("open");
+  panelOverlay.classList.add("open");
+  renderLogFiles();
+}
+
 btnHistory.addEventListener("click", () => openHistoryPanel());
 btnSaveVersion.addEventListener("click", () => openHistoryPanel({ focusComposer: true }));
-btnPackages.addEventListener("click", () => openPackagesPanel());
+menuPackagesTrigger.addEventListener("click", () => openPackagesPanel());
+btnLogFiles.addEventListener("click", () => openLogFilesPanel());
 btnCloseHistory.addEventListener("click", closeAllPanels);
 btnClosePackages.addEventListener("click", closeAllPanels);
+btnCloseLogFiles.addEventListener("click", closeAllPanels);
 panelOverlay.addEventListener("click", closeAllPanels);
+
+// ─── Sync Changes: commit (AI or user message), pull --rebase, push ───
+
+/**
+ * Run (or continue) a sync attempt.
+ *
+ * @param {string | null} commitMessage - Pass null for the first
+ *   attempt, so the backend tries the AI assistant itself; pass a
+ *   user-typed message when continuing after
+ *   `sync-commit-message-dialog` was shown.
+ */
+async function performSync(commitMessage) {
+  if (!currentProjectId) {
+    notify("Open a project before syncing.", "error");
+    return;
+  }
+
+  btnSyncChanges.disabled = true;
+  btnSyncChanges.textContent = "Syncing…";
+
+  try {
+    const result = await api.syncProject(currentProjectId, commitMessage, getAuthorName());
+
+    if (result.status === "needs_commit_message") {
+      syncChangedFilesList.replaceChildren();
+      for (const path of result.changed_files) {
+        const item = document.createElement("li");
+        item.textContent = path;
+        syncChangedFilesList.appendChild(item);
+      }
+      syncCommitMessageInput.value = "";
+      syncCommitMessageDialog.showModal();
+      syncCommitMessageInput.focus();
+      return;
+    }
+
+    const parts = [];
+    if (result.committed) {
+      parts.push(`committed "${result.commit_message}"`);
+    }
+    if (result.pulled_commits > 0) {
+      parts.push(
+        `pulled ${result.pulled_commits} change${result.pulled_commits === 1 ? "" : "s"}`,
+      );
+    }
+    if (result.pushed) {
+      parts.push("pushed");
+    }
+    notify(
+      parts.length > 0 ? `Synced: ${parts.join(", ")}.` : "Already up to date.",
+      "success",
+    );
+
+    if (result.pulled_commits > 0) {
+      // The remote's changes just landed in the working tree -- reload
+      // so the file tree/editor reflect them.
+      await openProject(currentProjectId);
+    }
+  } catch (error) {
+    notify(`Sync failed: ${error.message}`, "error");
+  } finally {
+    btnSyncChanges.disabled = false;
+    btnSyncChanges.textContent = "Sync Changes";
+  }
+}
+
+btnSyncChanges.addEventListener("click", () => performSync(null));
+
+btnCancelSyncCommitMessage.addEventListener("click", () => syncCommitMessageDialog.close());
+
+syncCommitMessageForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+
+  const message = syncCommitMessageInput.value.trim();
+  if (!message) {
+    notify("Enter a commit message.", "error");
+    return;
+  }
+
+  syncCommitMessageDialog.close();
+  await performSync(message);
+});
 
 // ─── Project selector / creation / deletion ───
 
@@ -424,7 +687,6 @@ async function loadProjects({ selectId } = {}) {
     option.value = "";
     option.textContent = "No projects yet — create one";
     projectSelect.appendChild(option);
-    btnDeleteProject.classList.add("hidden");
     await openProject(null);
     return;
   }
@@ -442,7 +704,6 @@ async function loadProjects({ selectId } = {}) {
     projectsById.keys().next().value;
 
   projectSelect.value = targetId;
-  btnDeleteProject.classList.remove("hidden");
   await openProject(targetId);
 }
 
@@ -452,6 +713,7 @@ projectSelect.addEventListener("change", () => {
 
 async function openNewProjectDialog({ focusTemplate = false } = {}) {
   newProjectNameInput.value = "";
+  newProjectRemoteUrlInput.value = "";
   newProjectTemplateSelect.replaceChildren();
 
   const blankOption = document.createElement("option");
@@ -489,7 +751,11 @@ newProjectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
 
   const name = newProjectNameInput.value.trim();
-  const templateId = newProjectTemplateSelect.value || null;
+  const remoteUrl = newProjectRemoteUrlInput.value.trim() || null;
+  // A remote clone supplies its own content -- ignore the template
+  // choice rather than sending both and relying on the backend's 400
+  // to catch it (mutually exclusive, enforced there too).
+  const templateId = remoteUrl ? null : newProjectTemplateSelect.value || null;
 
   if (!name) {
     notify("Enter a project name.", "error");
@@ -497,17 +763,21 @@ newProjectForm.addEventListener("submit", async (event) => {
   }
 
   try {
-    const created = await api.createProject(name, templateId);
+    const created = await api.createProject(name, templateId, remoteUrl);
     newProjectDialog.close();
-    notify(`Project "${name}" created.`, "success");
+    notify(
+      remoteUrl ? `Project "${name}" cloned.` : `Project "${name}" created.`,
+      "success",
+    );
     await loadProjects({ selectId: created.id });
   } catch (error) {
     notify(`Could not create project: ${error.message}`, "error");
   }
 });
 
-btnDeleteProject.addEventListener("click", () => {
+document.getElementById("menu-delete-project").addEventListener("click", () => {
   if (!currentProjectId) {
+    notify("Open a project before deleting it.", "error");
     return;
   }
 
@@ -588,6 +858,16 @@ async function openFile(path) {
     return false;
   }
 
+  // Flush before reassigning currentFilePath: a pending debounced
+  // autosave from edits made in the file we're leaving captures its
+  // text at keystroke time, but reads currentFilePath (and saves to
+  // it) only when its timer actually fires. Reassigning first would
+  // let that stale text silently land in the newly-opened file
+  // instead, once the old timer eventually ran.
+  if (editor) {
+    editor.flush();
+  }
+
   currentFilePath = path;
   currentFileLabel.textContent = path;
   fileTree.setActiveFile(path);
@@ -607,6 +887,7 @@ function mountEditor(initialText) {
     parent: editorContainer,
     doc: initialText,
     onChange: handleEditorChange,
+    ...getEditorSettings(),
   });
 }
 
@@ -708,6 +989,7 @@ async function compileCurrentProject({ silent = false } = {}) {
           assistantPanel.askAboutCompileError(logText);
         },
       });
+      logEntry("compile", result.log);
 
       if (!silent) {
         notify("Compile failed — see log in the preview pane.", "error");
@@ -717,6 +999,7 @@ async function compileCurrentProject({ silent = false } = {}) {
     compileStatus.textContent = "";
     clearPreview(previewContainer);
     showCompileError(previewContainer, error.message);
+    logEntry("compile", error.message);
     notify(`Compile request failed: ${error.message}`, "error");
   }
 }
@@ -775,6 +1058,25 @@ async function openProject(projectId) {
   await compileCurrentProject({ silent: true });
 }
 
+// ─── Collapse editor/preview panes (focus on a single pane) ───
+
+function setPaneCollapsed(pane, otherPane, toggleButton, collapsedIcon, expandedIcon) {
+  const collapsing = !pane.classList.contains("collapsed");
+
+  pane.classList.toggle("collapsed", collapsing);
+  otherPane.classList.toggle("expanded", collapsing);
+  toggleButton.textContent = collapsing ? expandedIcon : collapsedIcon;
+  toggleButton.title = collapsing ? "Expand" : "Collapse";
+}
+
+btnCollapseEditorPane.addEventListener("click", () => {
+  setPaneCollapsed(editorPane, previewPane, btnCollapseEditorPane, "◀", "▶");
+});
+
+btnCollapsePreviewPane.addEventListener("click", () => {
+  setPaneCollapsed(previewPane, editorPane, btnCollapsePreviewPane, "▶", "◀");
+});
+
 // ─── Resizable editor/preview divider ───
 
 (function setUpDivider() {
@@ -819,6 +1121,11 @@ async function openProject(projectId) {
   handle.addEventListener("mousedown", (event) => {
     isDragging = true;
     handle.classList.add("dragging");
+    // Manually resizing implies leaving minimize/maximize mode --
+    // otherwise the next un-minimize/un-maximize would restore a now
+    // stale height instead of whatever this drag set.
+    assistantDock.classList.remove("minimized", "maximized");
+    assistantDockRestoreHeight = null;
     event.preventDefault();
   });
 

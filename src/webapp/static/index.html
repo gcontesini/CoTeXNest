@@ -40,6 +40,7 @@
       "@codemirror/search": "https://esm.sh/@codemirror/search@6",
       "@codemirror/legacy-modes": "https://esm.sh/@codemirror/legacy-modes@6",
       "@codemirror/legacy-modes/mode/stex": "https://esm.sh/@codemirror/legacy-modes@6/mode/stex",
+      "@lezer/highlight": "https://esm.sh/@lezer/highlight@1",
       "pdfjs-dist": "https://esm.sh/pdfjs-dist@4"
     }
   }
@@ -61,9 +62,17 @@
           <li role="none"><button class="menubar-dropdown-item" id="menu-save-as" type="button" role="menuitem">Save As…</button></li>
           <li role="none"><button class="menubar-dropdown-item" id="menu-export-pdf" type="button" role="menuitem">Export PDF</button></li>
           <li class="menubar-separator" role="separator"></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-delete-project" type="button" role="menuitem">Delete Project</button></li>
+          <li class="menubar-separator" role="separator"></li>
           <li role="none"><button class="menubar-dropdown-item" id="menu-close-project" type="button" role="menuitem">Close Project</button></li>
           <li role="none"><button class="menubar-dropdown-item" id="menu-quit" type="button" role="menuitem">Quit</button></li>
         </ul>
+      </div>
+      <div class="menubar-item">
+        <button class="menubar-trigger" id="menu-packages-trigger" type="button">Packages</button>
+      </div>
+      <div class="menubar-item">
+        <button class="menubar-trigger" id="menu-settings-trigger" type="button">Settings</button>
       </div>
       <div class="menubar-item">
         <button class="menubar-trigger" id="menu-help-trigger" type="button" aria-haspopup="true" aria-expanded="false">Help</button>
@@ -82,14 +91,14 @@
         <option value="">Loading projects…</option>
       </select>
       <button class="btn" id="btn-new-project" type="button">+ New Project</button>
-      <button class="btn btn-danger hidden" id="btn-delete-project" type="button">Delete Project</button>
 
       <span class="spacer"></span>
 
       <button class="btn btn-primary" id="btn-compile" type="button">Refresh</button>
       <button class="btn" id="btn-assistant" type="button">Assistant</button>
+      <button class="btn" id="btn-log-files" type="button">Log Files</button>
       <button class="btn" id="btn-history" type="button">History</button>
-      <button class="btn" id="btn-packages" type="button">Packages</button>
+      <button class="btn" id="btn-sync-changes" type="button">Sync Changes</button>
       <button class="btn" id="btn-save-version" type="button">Save Version</button>
     </header>
 
@@ -101,12 +110,15 @@
           <span>Files</span>
           <button class="btn btn-icon" id="btn-collapse-sidebar" type="button" title="Collapse sidebar">⟨⟨</button>
         </div>
-        <div class="sidebar-toolbar">
+        <div class="sidebar-toolbar hidden" id="file-search-row">
           <input id="file-search" type="text" placeholder="Search files…" aria-label="Search files" />
         </div>
-        <div class="sidebar-toolbar">
-          <button class="btn btn-icon" id="btn-new-file-root" type="button" title="New file">📄+</button>
-          <button class="btn btn-icon" id="btn-new-folder-root" type="button" title="New folder">📁+</button>
+        <div class="sidebar-toolbar sidebar-toolbar-split">
+          <span class="sidebar-toolbar-group">
+            <button class="btn btn-icon" id="btn-new-file-root" type="button" title="New file">📄+</button>
+            <button class="btn btn-icon" id="btn-new-folder-root" type="button" title="New folder">📁+</button>
+          </span>
+          <button class="btn btn-icon" id="btn-toggle-file-search" type="button" title="Search files">🔍</button>
         </div>
         <div id="file-tree">
           <p class="empty-state">No project loaded yet.</p>
@@ -116,6 +128,7 @@
       <main class="workspace">
         <section class="pane editor-pane" id="editor-pane">
           <div class="pane-header">
+            <button class="btn btn-icon pane-collapse-toggle" id="btn-collapse-editor-pane" type="button" title="Collapse">◀</button>
             <span class="pane-title" id="current-file-label">No file open</span>
             <span id="save-status"></span>
           </div>
@@ -126,6 +139,7 @@
 
         <section class="pane preview-pane" id="preview-pane">
           <div class="pane-header">
+            <button class="btn btn-icon pane-collapse-toggle" id="btn-collapse-preview-pane" type="button" title="Collapse">▶</button>
             <span class="pane-title">Preview</span>
             <span id="compile-status"></span>
           </div>
@@ -140,11 +154,12 @@
     <section class="assistant-dock hidden" id="assistant-dock" aria-label="AI assistant">
       <div class="assistant-resize-handle" id="assistant-resize-handle" title="Drag to resize"></div>
       <div class="assistant-dock-header">
-        <div class="assistant-tabs">
-          <button class="assistant-tab active" id="tab-assistant-chat" type="button">Chat</button>
-          <button class="assistant-tab" id="tab-assistant-settings" type="button">Settings</button>
+        <span class="assistant-dock-title">Assistant Chat</span>
+        <div class="assistant-dock-window-controls">
+          <button class="btn btn-icon" id="btn-minimize-assistant" type="button" title="Minimize">🗕</button>
+          <button class="btn btn-icon" id="btn-maximize-assistant" type="button" title="Maximize">🗖</button>
+          <button class="btn btn-icon" id="btn-close-assistant" type="button" title="Close">✕</button>
         </div>
-        <button class="btn btn-icon" id="btn-close-assistant" type="button" title="Close">✕</button>
       </div>
 
       <div class="assistant-panel-body" id="assistant-chat-view">
@@ -152,7 +167,8 @@
           <p class="empty-state">
             Ask the assistant for help with your LaTeX. It will never
             change a file on its own -- every suggestion appears here
-            first, for you to accept or reject.
+            first, for you to accept or reject. Provider/model/key
+            setup lives in Settings → AI Assistant.
           </p>
         </div>
         <form class="assistant-chat-form" id="assistant-chat-form">
@@ -160,8 +176,6 @@
           <button class="btn btn-primary" type="submit">Send</button>
         </form>
       </div>
-
-      <div class="assistant-panel-body hidden" id="assistant-settings-view"></div>
     </section>
 
     <!-- ─── Status bar ─── -->
@@ -193,6 +207,19 @@
     <div class="panel-body" id="packages-panel-body"></div>
   </aside>
 
+  <aside class="panel" id="log-files-panel" aria-label="Log files">
+    <div class="panel-header">
+      <h2>Log Files</h2>
+      <div>
+        <button class="btn btn-icon" id="btn-clear-log-files" type="button" title="Clear log">Clear</button>
+        <button class="btn btn-icon" id="btn-close-log-files" type="button" title="Close">✕</button>
+      </div>
+    </div>
+    <div class="panel-body" id="log-files-panel-body">
+      <p class="empty-state">No compilation or assistant errors yet this session.</p>
+    </div>
+  </aside>
+
   <!-- ─── New project dialog ─── -->
   <dialog id="new-project-dialog">
     <form id="new-project-form">
@@ -206,6 +233,19 @@
         <select id="new-project-template">
           <option value="">Blank project</option>
         </select>
+      </div>
+      <div class="form-row" style="margin-top: 0.75rem;">
+        <label for="new-project-remote-url">Remote repository URL (optional)</label>
+        <input
+          id="new-project-remote-url"
+          type="text"
+          placeholder="https://github.com/you/paper.git or git@github.com:you/paper.git"
+        />
+        <p class="field-hint">
+          Clones this as the project's starting content and git
+          history instead of the template above -- use this to
+          continue a LaTeX project shared with you.
+        </p>
       </div>
       <div class="dialog-actions">
         <button class="btn" type="button" id="btn-cancel-new-project">Cancel</button>
@@ -234,6 +274,55 @@
         <button class="btn btn-danger" type="submit" id="btn-confirm-delete-project" disabled>Delete this project</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- ─── Sync Changes: commit message dialog ─── -->
+  <dialog id="sync-commit-message-dialog">
+    <form id="sync-commit-message-form">
+      <h2 style="margin-top:0;">Describe your changes</h2>
+      <p>
+        The AI assistant couldn't write a commit message for you (it
+        may not be configured) -- write one yourself to continue
+        syncing.
+      </p>
+      <div class="form-row">
+        <label>Changed files</label>
+        <ul id="sync-changed-files-list" class="plain-list"></ul>
+      </div>
+      <div class="form-row">
+        <label for="sync-commit-message-input">Commit message</label>
+        <input
+          id="sync-commit-message-input"
+          type="text"
+          required
+          maxlength="500"
+          placeholder="e.g. Fix citation in section 3"
+        />
+      </div>
+      <div class="dialog-actions">
+        <button class="btn" type="button" id="btn-cancel-sync-commit-message">Cancel</button>
+        <button class="btn btn-primary" type="submit">Commit &amp; Sync</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- ─── Settings dialog ─── -->
+  <dialog id="settings-dialog" class="settings-dialog">
+    <div class="settings-dialog-layout">
+      <nav class="settings-nav" aria-label="Settings categories">
+        <button class="settings-nav-item active" type="button" data-category="general">General</button>
+        <button class="settings-nav-item" type="button" data-category="editor">Editor</button>
+        <button class="settings-nav-item" type="button" data-category="assistant">AI Assistant</button>
+        <button class="settings-nav-item" type="button" data-category="dictionary">Dictionary</button>
+      </nav>
+      <div class="settings-content">
+        <div class="settings-dialog-header">
+          <h2 id="settings-dialog-title">General</h2>
+          <button class="btn btn-icon" id="btn-close-settings" type="button" title="Close">✕</button>
+        </div>
+        <div class="settings-panel-body" id="settings-panel-body"></div>
+      </div>
+    </div>
   </dialog>
 
   <!-- ─── Quit dialog ─── -->

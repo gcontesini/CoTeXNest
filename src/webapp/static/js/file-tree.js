@@ -15,7 +15,13 @@
  * protection; this module only has to drive it.
  */
 
-import { getFileTree, createEntry, renameEntry, deleteFile } from "./api.js";
+import { getFileTree, createEntry, renameEntry, deleteFile, uploadFile } from "./api.js";
+
+// Custom MIME type used to tag a drag that originated from a row in
+// this tree, so drop handlers can tell "move this existing entry"
+// apart from "an OS file was dragged in" (checked via
+// event.dataTransfer.files instead) without relying on global state.
+const INTERNAL_DRAG_MIME_TYPE = "application/x-latex-writer-tree-path";
 
 function createElement(tagName, className, textContent) {
   const element = document.createElement(tagName);
@@ -319,6 +325,104 @@ export function createFileTree({
     }
   }
 
+  // ─── Drag and drop: move within the tree, or drop OS files in ───
+
+  /**
+   * @param {string} ancestorPath
+   * @param {string} path
+   * @returns {boolean} True if `path` is `ancestorPath` itself or
+   *   lives inside it -- used to reject dropping a folder into itself
+   *   or one of its own descendants.
+   */
+  function isSameOrDescendant(ancestorPath, path) {
+    return path === ancestorPath || path.startsWith(`${ancestorPath}/`);
+  }
+
+  async function moveNodeTo(sourcePath, targetDirPath) {
+    if (isSameOrDescendant(sourcePath, targetDirPath)) {
+      notify("Can't move a folder into itself.", "error");
+      return;
+    }
+
+    const newPath = joinPath(targetDirPath, basename(sourcePath));
+
+    if (newPath === sourcePath) {
+      return; // dropped back into its current parent -- nothing to do
+    }
+
+    try {
+      await renameEntry(projectId, sourcePath, newPath);
+      notify(`Moved to "${newPath}".`, "success");
+
+      if (activePath === sourcePath) {
+        activePath = newPath;
+      } else if (activePath && isSameOrDescendant(sourcePath, activePath)) {
+        activePath = newPath + activePath.slice(sourcePath.length);
+      }
+
+      onPathRenamed?.(sourcePath, newPath);
+      await fetchAndRender();
+    } catch (error) {
+      notify(`Could not move: ${error.message}`, "error");
+    }
+  }
+
+  async function uploadDroppedFiles(targetDirPath, fileList) {
+    const files = Array.from(fileList);
+    let addedCount = 0;
+
+    for (const file of files) {
+      const destination = joinPath(targetDirPath, file.name);
+
+      try {
+        await uploadFile(projectId, destination, file);
+        addedCount += 1;
+      } catch (error) {
+        notify(`Could not add "${file.name}": ${error.message}`, "error");
+      }
+    }
+
+    if (addedCount > 0) {
+      notify(
+        addedCount === 1 ? `Added "${files[0].name}".` : `Added ${addedCount} files.`,
+        "success",
+      );
+      await fetchAndRender();
+    }
+  }
+
+  /**
+   * Shared drop handler for both a tree row and the root drop zone.
+   *
+   * @param {DragEvent} event
+   * @param {string} targetDirPath - Directory the drop lands in.
+   */
+  function handleDrop(event, targetDirPath) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.dataTransfer.files && event.dataTransfer.files.length > 0) {
+      uploadDroppedFiles(targetDirPath, event.dataTransfer.files);
+      return;
+    }
+
+    const sourcePath = event.dataTransfer.getData(INTERNAL_DRAG_MIME_TYPE);
+
+    if (sourcePath) {
+      moveNodeTo(sourcePath, targetDirPath);
+    }
+  }
+
+  function isDraggedOverAcceptable(event) {
+    // Accept either our own internal drag or a real OS file drag --
+    // event.dataTransfer.types is populated during dragover even
+    // though .files/.getData() are only readable on drop itself.
+    return (
+      event.dataTransfer.types.includes(INTERNAL_DRAG_MIME_TYPE) ||
+      event.dataTransfer.types.includes("Files")
+    );
+  }
+
   // ─── Move-to dialog ───
 
   function ensureMoveDialog() {
@@ -577,6 +681,39 @@ export function createFileTree({
       openContextMenu(event, node);
     });
 
+    // Dropping onto a folder moves/uploads into it; dropping onto a
+    // file moves/uploads next to it (into its parent), the same way
+    // most desktop file managers treat a drop target that isn't itself
+    // a folder.
+    const dropTargetDir = isDir ? node.path : dirname(node.path);
+
+    row.draggable = editingPath !== node.path;
+
+    row.addEventListener("dragstart", (event) => {
+      event.stopPropagation();
+      event.dataTransfer.effectAllowed = "move";
+      event.dataTransfer.setData(INTERNAL_DRAG_MIME_TYPE, node.path);
+      event.dataTransfer.setData("text/plain", node.path);
+    });
+
+    row.addEventListener("dragover", (event) => {
+      if (!isDraggedOverAcceptable(event)) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "move";
+      row.classList.add("drag-over");
+    });
+
+    row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+
+    row.addEventListener("drop", (event) => {
+      row.classList.remove("drag-over");
+      handleDrop(event, dropTargetDir);
+    });
+
     row.addEventListener("click", () => {
       if (editingPath === node.path) {
         return;
@@ -661,6 +798,31 @@ export function createFileTree({
 
     container.appendChild(rootList);
   }
+
+  // Dropping onto empty space below all rows (or anywhere a row's own
+  // drop handler didn't already claim via stopPropagation) moves/
+  // uploads into the project root. Wired once on the persistent
+  // container, not per-render.
+  container.addEventListener("dragover", (event) => {
+    if (!isDraggedOverAcceptable(event)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    container.classList.add("drag-over");
+  });
+
+  container.addEventListener("dragleave", (event) => {
+    if (event.target === container) {
+      container.classList.remove("drag-over");
+    }
+  });
+
+  container.addEventListener("drop", (event) => {
+    container.classList.remove("drag-over");
+    handleDrop(event, "");
+  });
 
   render();
 

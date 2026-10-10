@@ -20,9 +20,12 @@ from ..models import (
     AiModelOption,
     AssistantApplyRequest,
     AssistantApplyResult,
+    AssistantChatJobStatus,
     AssistantChatRequest,
     AssistantChatResult,
     AssistantConfigUpdate,
+    AssistantFixJobStatus,
+    AssistantJobStarted,
     AssistantProviderConfig,
     ExternalProviderProfileCreate,
     ModelPullRequest,
@@ -33,6 +36,45 @@ from ..models import (
 from ..services import assistant
 
 router = APIRouter(prefix="/api", tags=["assistant"])
+
+# A job that failed stores the exception type name it was raised as
+# (see services.assistant._start_assistant_job); this maps that back
+# to the same HTTP status _translate_errors would have produced had
+# the original synchronous endpoint raised it directly.
+_JOB_ERROR_STATUS: dict[str, int] = {
+    "FileNotFoundError": 404,
+    "ConnectionError": 503,
+}
+
+
+def _resolve_job(job_id: str) -> dict:
+    """Fetch a background job's state, raising if unknown or failed.
+
+    Args:
+        job_id (str): Id returned by a ``.../start`` endpoint.
+
+    Returns:
+        dict: The job's state when not in an error state (``status``
+        is ``"running"`` or ``"done"``).
+
+    Raises:
+        HTTPException: 404 if the job id is unknown or has expired;
+            otherwise the status ``_JOB_ERROR_STATUS`` maps the job's
+            recorded error type to (400 if not listed, matching
+            ``_translate_errors``'s fallback for a plain ``ValueError``).
+    """
+    job = assistant.get_assistant_job(job_id)
+
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail=f"unknown or expired job id: {job_id!r}"
+        )
+
+    if job["status"] == "error":
+        status_code = _JOB_ERROR_STATUS.get(job["error_type"], 400)
+        raise HTTPException(status_code=status_code, detail=job["error"])
+
+    return job
 
 
 def _translate_errors(error: Exception) -> HTTPException:
@@ -213,6 +255,38 @@ def chat(project_id: str, payload: AssistantChatRequest) -> AssistantChatResult:
 
 
 @router.post(
+    "/projects/{project_id}/assistant/chat/start",
+    response_model=AssistantJobStarted,
+)
+def start_chat(project_id: str, payload: AssistantChatRequest) -> AssistantJobStarted:
+    """Start one chat turn as a background job; poll for its result.
+
+    Preferred over ``POST .../assistant/chat`` from the UI: a slow
+    provider (local or external) can legitimately take longer than any
+    timeout reasonable to block an HTTP request on, so this returns
+    immediately with a job id instead -- see
+    ``GET .../assistant/jobs/chat/{job_id}``.
+    """
+    job_id = assistant.start_chat_job(project_id, payload.messages, payload.main_file)
+    return AssistantJobStarted(job_id=job_id)
+
+
+@router.get(
+    "/assistant/jobs/chat/{job_id}", response_model=AssistantChatJobStatus
+)
+def poll_chat_job(job_id: str) -> AssistantChatJobStatus:
+    """Poll a chat job started via ``POST .../assistant/chat/start``.
+
+    Raises:
+        HTTPException: 404 if the job id is unknown/expired or the
+            project didn't exist, 503 if the provider could not be
+            reached, 400 for any other failure (e.g. misconfiguration).
+    """
+    job = _resolve_job(job_id)
+    return AssistantChatJobStatus(status=job["status"], result=job["result"])
+
+
+@router.post(
     "/projects/{project_id}/assistant/suggest", response_model=AssistantChatResult
 )
 def suggest(project_id: str, main_file: str) -> AssistantChatResult:
@@ -247,6 +321,41 @@ def fix_compile_error(project_id: str, payload: AiAssistRequest) -> AiAssistResu
         )
     except (ValueError, FileNotFoundError, ConnectionError, OSError) as error:
         raise _translate_errors(error) from error
+
+
+@router.post(
+    "/projects/{project_id}/assistant/fix-compile-error/start",
+    response_model=AssistantJobStarted,
+)
+def start_fix_compile_error(
+    project_id: str, payload: AiAssistRequest
+) -> AssistantJobStarted:
+    """Start a compile-error fix attempt as a background job.
+
+    Preferred over ``POST .../assistant/fix-compile-error`` from the
+    UI -- see ``start_chat`` for why, and
+    ``GET .../assistant/jobs/fix-compile-error/{job_id}`` to poll.
+    """
+    job_id = assistant.start_fix_compile_error_job(
+        project_id, payload.log, payload.main_file
+    )
+    return AssistantJobStarted(job_id=job_id)
+
+
+@router.get(
+    "/assistant/jobs/fix-compile-error/{job_id}",
+    response_model=AssistantFixJobStatus,
+)
+def poll_fix_compile_error_job(job_id: str) -> AssistantFixJobStatus:
+    """Poll a job started via ``POST .../assistant/fix-compile-error/start``.
+
+    Raises:
+        HTTPException: 404 if the job id is unknown/expired or the
+            project didn't exist, 503 if the provider could not be
+            reached, 400 for any other failure (e.g. misconfiguration).
+    """
+    job = _resolve_job(job_id)
+    return AssistantFixJobStatus(status=job["status"], result=job["result"])
 
 
 @router.post(

@@ -22,6 +22,16 @@ class ProjectSummary(BaseModel):
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     template_id: str | None = None
+    remote_url: str | None = Field(
+        default=None,
+        description=(
+            "Any git-clonable URL (HTTPS or SSH). When given, this "
+            "clone becomes the project's initial content and git "
+            "history, and its origin remote -- instead of starting "
+            "from template_id or a blank document. Mutually exclusive "
+            "with template_id."
+        ),
+    )
 
 
 class FileNode(BaseModel):
@@ -82,6 +92,29 @@ class CommitInfo(BaseModel):
 class CommitCreate(BaseModel):
     message: str = Field(min_length=1, max_length=500)
     author: str = Field(default="anonymous", max_length=120)
+
+
+class ProjectSyncRequest(BaseModel):
+    """Request for the "Sync Changes" action: commit, pull --rebase, push.
+
+    ``commit_message`` is optional on the first call of a sync attempt
+    -- if there are uncommitted changes and none is given, the response
+    comes back with ``status="needs_commit_message"`` instead of
+    failing, so the caller can supply one (AI-generated or
+    user-typed) and call again.
+    """
+
+    commit_message: str | None = None
+    author: str = Field(default="anonymous", max_length=120)
+
+
+class ProjectSyncResult(BaseModel):
+    status: str  # "synced" | "needs_commit_message"
+    committed: bool = False
+    commit_message: str | None = None
+    pulled_commits: int = 0
+    pushed: bool = False
+    changed_files: list[str] = Field(default_factory=list)
 
 
 class DiffEntry(BaseModel):
@@ -257,3 +290,28 @@ class AiAssistResult(BaseModel):
     suggestion: str
     proposal: AssistantProposal | None = None
     provider_notice: str | None = None
+
+
+# ─── Background job polling (chat / fix-compile-error) ───
+#
+# A provider call -- local or external -- can legitimately take longer
+# than any fixed timeout short enough to still be reasonable to block
+# an HTTP request on (observed live: a CPU-only local model under load,
+# and separately a slow external provider, each exceeded even a 180s
+# synchronous ceiling). These two actions run on a background thread
+# instead; the frontend polls for the result rather than waiting on
+# the original request. See services/assistant.py's job runner.
+
+
+class AssistantJobStarted(BaseModel):
+    job_id: str
+
+
+class AssistantChatJobStatus(BaseModel):
+    status: str  # "running" | "done"
+    result: AssistantChatResult | None = None
+
+
+class AssistantFixJobStatus(BaseModel):
+    status: str  # "running" | "done"
+    result: AiAssistResult | None = None

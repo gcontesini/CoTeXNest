@@ -27,13 +27,78 @@ new commit on top of the current ``HEAD``. This means:
 
 from __future__ import annotations
 
+import re
 import shutil
 from pathlib import Path
 
 import git
 
 from .. import config
-from ..models import CommitInfo, DiffEntry
+from ..models import CommitInfo, DiffEntry, ProjectSyncResult
+
+# Cap on how much diff text ever gets sent to the AI assistant for
+# commit-message generation -- a small local model's context window is
+# limited, and a huge diff would either get silently truncated by the
+# model itself or blow past it entirely. Measured in characters, not
+# tokens, since this module has no tokenizer available; a generous
+# overestimate (roughly 1 token per 4 characters) keeps this well
+# under even a modest 2048-token context.
+_MAX_DIFF_CHARS_FOR_COMMIT_MESSAGE = 6000
+
+
+class NeedsCommitMessage(Exception):
+    """Raised by ``sync_with_remote`` when uncommitted changes exist but
+    no ``commit_message`` was given.
+
+    The caller (the router) is expected to try generating one (e.g. via
+    the AI assistant, using ``diff_text``) and call ``sync_with_remote``
+    again with the result -- or, failing that, ask the user directly.
+    """
+
+    def __init__(self, changed_files: list[str], diff_text: str) -> None:
+        super().__init__("uncommitted changes need a commit message before syncing")
+        self.changed_files = changed_files
+        self.diff_text = diff_text
+
+
+_CREDENTIALS_IN_URL_PATTERN = re.compile(r"://[^/@\s]+@")
+
+
+def redact_url_credentials(text: str) -> str:
+    """Strip embedded basic-auth credentials from any URL in ``text``.
+
+    A remote URL can legitimately look like
+    ``https://token@github.com/owner/repo.git`` -- convenient for
+    scripting, but not something that should ever come back verbatim
+    in an API response, a toast, or a log line. Used on every git
+    error message this module (and project creation's clone path)
+    surfaces, since git itself often echoes the exact URL it was given
+    back in a failure message.
+
+    Args:
+        text (str): Arbitrary text that may contain one or more URLs.
+
+    Returns:
+        str: Same text with any ``scheme://user:pass@`` or
+        ``scheme://token@`` prefix replaced with ``scheme://***@``.
+    """
+    return _CREDENTIALS_IN_URL_PATTERN.sub("://***@", text)
+
+
+def _git_error_detail(error: git.GitCommandError) -> str:
+    """Pull a clean, credential-redacted message out of a GitCommandError.
+
+    Args:
+        error (git.GitCommandError): The error raised by a git
+            subprocess call.
+
+    Returns:
+        str: ``error.stderr`` if captured, else ``str(error)`` -- both
+        redacted.
+    """
+    raw = error.stderr.strip() if error.stderr else str(error)
+    return redact_url_credentials(raw)
+
 
 _CHANGE_TYPE_TO_STATUS: dict[str, str] = {
     "A": "added",
@@ -355,3 +420,179 @@ def _resolve_commit(repo: git.Repo, commit_id: str) -> git.Commit:
         ValueError,
     ) as error:
         raise LookupError(f"unknown commit: {commit_id}") from error
+
+
+def _staged_diff_text(repo: git.Repo) -> str:
+    """Render the staged (index-vs-HEAD) diff as text, capped in size.
+
+    Used only to feed the AI assistant a commit-message prompt -- not
+    shown to the user directly, so truncating is an acceptable
+    trade-off for staying within a small model's context window.
+
+    Args:
+        repo (git.Repo): Repository with changes already staged
+            (``repo.git.add(A=True)`` already called).
+
+    Returns:
+        str: The diff text, truncated with a note if it was too long.
+    """
+    try:
+        diff_text = repo.git.diff("--cached")
+    except git.GitCommandError:
+        diff_text = ""
+
+    if len(diff_text) > _MAX_DIFF_CHARS_FOR_COMMIT_MESSAGE:
+        diff_text = (
+            diff_text[:_MAX_DIFF_CHARS_FOR_COMMIT_MESSAGE]
+            + "\n... (diff truncated for length)"
+        )
+
+    return diff_text
+
+
+def sync_with_remote(
+    project_id: str,
+    commit_message: str | None = None,
+    author: str = "anonymous",
+) -> ProjectSyncResult:
+    """Commit any local changes, rebase onto the remote, then push.
+
+    Mirrors a typical editor's "Sync Changes" action: if the working
+    tree is dirty, commit everything first (so local work is never
+    lost by a later step); fetch and rebase local commits on top of
+    ``origin/<current branch>`` if it already exists (a no-op the
+    first time a brand-new remote is synced); then push, establishing
+    upstream tracking if this is the first push.
+
+    A rebase conflict aborts the rebase (restoring the pre-rebase
+    state exactly) and raises, rather than leaving the repository in a
+    conflicted, partially-rebased state for the caller to discover
+    later -- this app has no conflict-resolution UI, so asking the
+    user to resolve it directly with git in the project's folder is
+    the honest option, not a silent ``git checkout --theirs`` or
+    similar that could discard one side's changes without asking.
+
+    Args:
+        project_id (str): Identifier of the project under
+            ``config.WORKSPACE_ROOT``.
+        commit_message (str | None): Message for the commit of any
+            uncommitted changes. Required only if the working tree is
+            actually dirty; ignored otherwise.
+        author (str): Display name recorded as the commit author, if a
+            commit is made.
+
+    Returns:
+        ProjectSyncResult: What happened -- whether a commit was made,
+        how many remote commits were pulled in, and whether a push
+        happened.
+
+    Raises:
+        FileNotFoundError: If the project directory does not exist or
+            is not a git repository.
+        NeedsCommitMessage: If the working tree is dirty and no
+            ``commit_message`` was given -- the caller should try to
+            generate one (``exc.diff_text`` is provided for this) and
+            call again, or ask the user directly.
+        ValueError: If the project has no ``origin`` remote
+            configured, its repository is in a detached-HEAD state, or
+            rebasing onto the remote hit a conflict.
+        ConnectionError: If fetching from or pushing to the remote
+            failed (network error, auth failure, rejected push, etc.).
+    """
+    assert author.strip(), "author must not be empty"
+
+    repo: git.Repo = _open_repo(project_id)
+
+    if "origin" not in (remote.name for remote in repo.remotes):
+        raise ValueError(
+            "this project has no remote configured -- link one first "
+            "(see the README for how to set a project's git remote)"
+        )
+
+    committed = False
+    used_commit_message: str | None = None
+
+    if repo.is_dirty(untracked_files=True):
+        repo.git.add(A=True)
+
+        if not commit_message or not commit_message.strip():
+            changed_files = list(repo.index.diff("HEAD"))
+            changed_paths = sorted(
+                {item.b_path or item.a_path for item in changed_files}
+                | set(repo.untracked_files)
+            )
+            raise NeedsCommitMessage(changed_paths, _staged_diff_text(repo))
+
+        commit_author = git.Actor(author, f"{author}@localhost")
+        repo.index.commit(
+            commit_message.strip(), author=commit_author, committer=commit_author
+        )
+        committed = True
+        used_commit_message = commit_message.strip()
+
+    try:
+        branch_name = repo.active_branch.name
+    except TypeError as error:
+        raise ValueError(
+            "this project's repository has no current branch (detached "
+            "HEAD) -- this shouldn't normally happen through the app; "
+            "resolve it directly with git in the project's folder"
+        ) from error
+
+    try:
+        repo.remotes.origin.fetch()
+    except git.GitCommandError as error:
+        raise ConnectionError(
+            f"could not fetch from the remote: {_git_error_detail(error)}"
+        ) from error
+
+    remote_ref_name = f"origin/{branch_name}"
+    has_remote_branch = remote_ref_name in (ref.name for ref in repo.refs)
+
+    pulled_commits = 0
+    if has_remote_branch:
+        before_rebase = repo.head.commit.hexsha
+        try:
+            repo.git.rebase(remote_ref_name)
+        except git.GitCommandError as error:
+            repo.git.rebase("--abort")
+            raise ValueError(
+                "syncing stopped: rebasing your changes onto the remote's "
+                "hit a conflict this app won't resolve automatically "
+                f"(nothing was changed -- resolve it directly with git in "
+                f"the project's folder, then try Sync again): "
+                f"{_git_error_detail(error)}"
+            ) from error
+
+        pulled_commits = sum(
+            1 for _ in repo.iter_commits(f"{before_rebase}..{remote_ref_name}")
+        )
+
+    try:
+        push_info = repo.remotes.origin.push(
+            f"{branch_name}:{branch_name}", set_upstream=True
+        )[0]
+    except git.GitCommandError as error:
+        raise ConnectionError(
+            f"could not push to the remote: {_git_error_detail(error)}"
+        ) from error
+
+    failure_flags = (
+        push_info.ERROR
+        | push_info.REJECTED
+        | push_info.REMOTE_REJECTED
+        | push_info.REMOTE_FAILURE
+    )
+    if push_info.flags & failure_flags:
+        raise ConnectionError(
+            "push rejected by the remote: "
+            f"{redact_url_credentials(push_info.summary.strip())}"
+        )
+
+    return ProjectSyncResult(
+        status="synced",
+        committed=committed,
+        commit_message=used_commit_message,
+        pulled_commits=pulled_commits,
+        pushed=True,
+    )

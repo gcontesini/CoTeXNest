@@ -126,10 +126,10 @@ body {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--app-font-family, var(--font-sans));
   color: var(--color-text);
   background: var(--color-bg);
-  font-size: 14px;
+  font-size: var(--app-font-size, 15px);
   line-height: 1.45;
   overflow: hidden;
 }
@@ -352,7 +352,7 @@ pre {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border-bottom: 1px solid var(--color-border);
   font-weight: 600;
   font-size: 0.8rem;
@@ -364,13 +364,23 @@ pre {
 .sidebar-toolbar {
   display: flex;
   gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--color-border);
 }
 
 .sidebar-toolbar input {
   flex: 1 1 auto;
   min-width: 0;
+}
+
+.sidebar-toolbar-split {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.sidebar-toolbar-group {
+  display: flex;
+  gap: var(--space-2);
 }
 
 #file-tree {
@@ -411,6 +421,17 @@ pre {
 .tree-row.active {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
+}
+
+.tree-row.drag-over {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -2px;
+  background: var(--color-bg-sunken);
+}
+
+#file-tree.drag-over {
+  outline: 2px dashed var(--color-accent);
+  outline-offset: -4px;
 }
 
 .tree-row .tree-label {
@@ -521,8 +542,8 @@ pre {
 .pane-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: var(--space-2) var(--space-3);
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--color-border);
   background: var(--color-bg-elevated);
   font-size: 0.8rem;
@@ -530,8 +551,33 @@ pre {
 }
 
 .pane-header .pane-title {
+  flex: 1 1 auto;
   font-weight: 600;
   color: var(--color-text);
+}
+
+.pane-collapse-toggle {
+  flex: 0 0 auto;
+}
+
+/* ─── Collapsing a pane to focus on the other ─── */
+
+.pane.collapsed {
+  flex: 0 0 2.5rem;
+  min-width: 2.5rem;
+  overflow: hidden;
+}
+
+.pane.collapsed .pane-title,
+.pane.collapsed #save-status,
+.pane.collapsed #compile-status,
+.pane.collapsed #editor-container,
+.pane.collapsed #preview-container {
+  display: none;
+}
+
+.pane.expanded {
+  flex: 1 1 100%;
 }
 
 #editor-container {
@@ -542,6 +588,11 @@ pre {
 
 #editor-container .cm-editor {
   height: 100%;
+}
+
+.cm-misspelled {
+  text-decoration: underline wavy var(--color-danger);
+  text-decoration-skip-ink: none;
 }
 
 #preview-container {
@@ -646,7 +697,7 @@ canvas.pdf-page {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--color-border);
 }
 
@@ -888,6 +939,16 @@ canvas.pdf-page {
 .assistant-resize-handle:hover,
 .assistant-resize-handle.dragging {
   background: var(--color-accent);
+}
+
+.assistant-dock.minimized .assistant-panel-body,
+.assistant-dock.minimized .assistant-resize-handle {
+  display: none;
+}
+
+.assistant-dock-window-controls {
+  display: flex;
+  gap: var(--space-1);
 }
 
 .assistant-dock-header {
@@ -1181,6 +1242,76 @@ canvas.pdf-page {
   text-align: center;
 }
 
+.field-hint {
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  margin: var(--space-1) 0 0;
+}
+
+/* ─── Log Files panel ─── */
+
+.log-entry {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+
+.log-entry-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.log-entry-badge {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px var(--space-1);
+  border-radius: var(--radius-sm, 4px);
+}
+
+.log-entry-compile .log-entry-badge {
+  background: var(--color-warning-bg, #5a3b00);
+  color: var(--color-warning, #ffb020);
+}
+
+.log-entry-assistant .log-entry-badge {
+  background: var(--color-danger-bg, #4a1a1a);
+  color: var(--color-danger);
+}
+
+.log-entry-message {
+  font-size: 0.8rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+
+.plain-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 10rem;
+  overflow-y: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+}
+
+.plain-list li {
+  padding: var(--space-1) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plain-list li:last-child {
+  border-bottom: none;
+}
+
 dialog {
   border: 1px solid var(--color-border);
   border-radius: var(--radius);
@@ -1199,4 +1330,88 @@ dialog::backdrop {
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
+}
+
+/* ─── Settings dialog ─── */
+
+.settings-dialog {
+  max-width: min(640px, 92vw);
+  width: 640px;
+  padding: 0;
+}
+
+.settings-dialog-layout {
+  display: flex;
+  min-height: 24rem;
+  max-height: 80vh;
+}
+
+.settings-nav {
+  flex: 0 0 11rem;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg-sunken);
+  overflow-y: auto;
+}
+
+.settings-nav-item {
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-3);
+  color: var(--color-text);
+}
+
+.settings-nav-item:hover {
+  background: var(--color-bg-elevated);
+}
+
+.settings-nav-item.active {
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+}
+
+.settings-content {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.settings-dialog-header h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.settings-panel-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+.settings-section h3 {
+  margin: 0;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
 }

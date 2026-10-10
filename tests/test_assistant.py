@@ -985,6 +985,179 @@ def test_apply_proposal_unknown_action_rejected(project_repo_dir: Path) -> None:
         assistant.apply_proposal(_PROJECT_ID, proposal, author="AI assistant")
 
 
+# ─── Background job polling (chat / fix-compile-error) ───
+
+
+def _wait_for_job_done(job_id: str, timeout_iterations: int = 50) -> dict:
+    import time
+
+    for _ in range(timeout_iterations):
+        job = assistant.get_assistant_job(job_id)
+        if job is not None and job["status"] != "running":
+            return job
+        time.sleep(0.05)
+
+    raise AssertionError(f"job {job_id} did not finish in time")
+
+
+def test_get_assistant_job_unknown_id_returns_none() -> None:
+    assert assistant.get_assistant_job("does-not-exist") is None
+
+
+def test_start_chat_job_reports_done_with_result(
+    project_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        assistant, "generate_completion_with_notice", lambda messages: ('{"reply": "ok", "proposals": []}', None)
+    )
+
+    job_id = assistant.start_chat_job(
+        _PROJECT_ID,
+        [AssistantChatMessage(role="user", content="hi")],
+        main_file="main.tex",
+    )
+    job = _wait_for_job_done(job_id)
+
+    assert job["status"] == "done"
+    assert job["result"].reply == "ok"
+    assert job["error"] is None
+
+
+def test_start_chat_job_reports_error_with_type(
+    project_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_generate_completion_with_notice(messages):
+        raise ConnectionError("provider unreachable")
+
+    monkeypatch.setattr(
+        assistant, "generate_completion_with_notice", fake_generate_completion_with_notice
+    )
+
+    job_id = assistant.start_chat_job(
+        _PROJECT_ID,
+        [AssistantChatMessage(role="user", content="hi")],
+        main_file="main.tex",
+    )
+    job = _wait_for_job_done(job_id)
+
+    assert job["status"] == "error"
+    assert job["error_type"] == "ConnectionError"
+    assert "provider unreachable" in job["error"]
+
+
+def test_start_fix_compile_error_job_reports_done(
+    project_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        assistant, "generate_completion_with_notice", lambda messages: ('{"reply": "fixed it", "proposals": []}', None)
+    )
+
+    job_id = assistant.start_fix_compile_error_job(
+        _PROJECT_ID, "! Undefined control sequence", "main.tex"
+    )
+    job = _wait_for_job_done(job_id)
+
+    assert job["status"] == "done"
+    assert job["result"].suggestion == "fixed it"
+
+
+def test_router_chat_job_roundtrip_success(
+    project_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        assistant, "generate_completion_with_notice", lambda messages: ('{"reply": "ok", "proposals": []}', None)
+    )
+
+    client = _make_client()
+    start_response = client.post(
+        f"/api/projects/{_PROJECT_ID}/assistant/chat/start",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert start_response.status_code == 200
+    job_id = start_response.json()["job_id"]
+
+    import time
+
+    poll_response = None
+    for _ in range(50):
+        poll_response = client.get(f"/api/assistant/jobs/chat/{job_id}")
+        if poll_response.json()["status"] == "done":
+            break
+        time.sleep(0.05)
+
+    assert poll_response is not None
+    assert poll_response.status_code == 200
+    assert poll_response.json()["result"]["reply"] == "ok"
+
+
+def test_router_chat_job_poll_maps_connection_error_to_503(
+    project_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_generate_completion_with_notice(messages):
+        raise ConnectionError("provider unreachable")
+
+    monkeypatch.setattr(
+        assistant, "generate_completion_with_notice", fake_generate_completion_with_notice
+    )
+
+    client = _make_client()
+    start_response = client.post(
+        f"/api/projects/{_PROJECT_ID}/assistant/chat/start",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+    )
+    job_id = start_response.json()["job_id"]
+
+    import time
+
+    poll_response = None
+    for _ in range(50):
+        poll_response = client.get(f"/api/assistant/jobs/chat/{job_id}")
+        if poll_response.status_code != 200 or poll_response.json().get("status") == "done":
+            break
+        time.sleep(0.05)
+
+    assert poll_response is not None
+    assert poll_response.status_code == 503
+
+
+def test_router_poll_unknown_job_id_returns_404() -> None:
+    client = _make_client()
+    response = client.get("/api/assistant/jobs/chat/does-not-exist")
+    assert response.status_code == 404
+
+    response = client.get("/api/assistant/jobs/fix-compile-error/does-not-exist")
+    assert response.status_code == 404
+
+
+def test_router_fix_compile_error_job_roundtrip_success(
+    project_repo_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        assistant, "generate_completion_with_notice", lambda messages: ('{"reply": "fixed it", "proposals": []}', None)
+    )
+
+    client = _make_client()
+    start_response = client.post(
+        f"/api/projects/{_PROJECT_ID}/assistant/fix-compile-error/start",
+        json={"log": "! error", "main_file": "main.tex"},
+    )
+    assert start_response.status_code == 200
+    job_id = start_response.json()["job_id"]
+
+    import time
+
+    poll_response = None
+    for _ in range(50):
+        poll_response = client.get(f"/api/assistant/jobs/fix-compile-error/{job_id}")
+        if poll_response.json()["status"] == "done":
+            break
+        time.sleep(0.05)
+
+    assert poll_response is not None
+    assert poll_response.status_code == 200
+    assert poll_response.json()["result"]["suggestion"] == "fixed it"
+
+
 # ─── Router (HTTP-level status code mapping) ───
 
 

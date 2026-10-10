@@ -3,6 +3,12 @@
 This guide covers two ways to run the application: Docker (recommended
 for normal use) and a local, non-Docker development setup.
 
+Don't already have Docker, git, or `just` installed, or would rather
+not think about it? Run `./bootstrap.sh` from the project root instead
+-- it installs whatever's missing and runs the Docker path below for
+you. See the main [README](../README.md#platform-support) for what's
+verified on your platform versus best-effort.
+
 ## Option A: Docker
 
 ### Prerequisites

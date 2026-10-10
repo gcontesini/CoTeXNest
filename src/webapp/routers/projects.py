@@ -8,14 +8,17 @@ routers and are wired together in ``webapp.main``.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import mimetypes
 import re
 import secrets
 import shutil
+import socket
 import time
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
@@ -193,6 +196,204 @@ def _apply_template(project_root: Path, template_id: str) -> bool:
     return True
 
 
+_ALLOWED_CLONE_SCHEMES = frozenset({"https", "ssh", "git"})
+
+# Matches git's scp-like shorthand remote syntax, e.g. "git@host:owner/repo.git"
+# -- a bare "host:path" with no "scheme://" prefix, treated by git (and by
+# this validator) as implicitly ssh. The negative lookahead excludes an
+# actual "scheme://" URL's "://" from matching as "host:" followed by "/".
+_SCP_LIKE_HOST_PATTERN = re.compile(r"^(?:[^@/:\s]+@)?([^/:\s]+):(?!//)")
+
+
+def _extract_clone_scheme_and_host(remote_url: str) -> tuple[str, str]:
+    """Pull a scheme and hostname out of a git remote URL, for validation.
+
+    Args:
+        remote_url: A URL (``scheme://host/...``) or git's scp-like
+            shorthand (``[user@]host:path``).
+
+    Returns:
+        ``(scheme, host)``, lowercased. The shorthand form is reported
+        as scheme ``"ssh"``, matching what it implicitly means to git.
+
+    Raises:
+        ValueError: If no host could be parsed out of ``remote_url``.
+    """
+    split = urlsplit(remote_url)
+    if split.scheme:
+        # A recognized scheme with no authority/host component at all
+        # (``file:///etc/passwd``, or a remote-helper form like
+        # ``ext::...`` that urlsplit happens to parse as scheme "ext")
+        # must still flow through here rather than falling to the
+        # scp-like branch below -- the empty host is harmless, since
+        # the scheme allowlist check right after this rejects all of
+        # these before an empty host could ever reach the SSRF check.
+        return split.scheme.lower(), (split.hostname or "").lower()
+
+    scp_match = _SCP_LIKE_HOST_PATTERN.match(remote_url)
+    if scp_match:
+        return "ssh", scp_match.group(1).lower()
+
+    raise ValueError(
+        f"could not parse a host out of remote_url {remote_url!r} -- "
+        "expected an https://, ssh://, or git:// URL, or the "
+        "git@host:path shorthand"
+    )
+
+
+def _validate_clone_url(remote_url: str) -> None:
+    """Reject a ``remote_url`` that isn't a safe, external git remote.
+
+    Two things this specifically guards against, neither covered by
+    GitPython's own (verified, not assumed -- see the ``gitpython``
+    pin's comment in ``pyproject.toml``) built-in protections against
+    ``ext::``-style remote-helper URLs and dangerous git options:
+
+    - **Disallowed schemes**, most importantly ``file://``: not a
+      remote-helper RCE (so GitPython itself doesn't flag it), but
+      still lets a request make this server clone from an arbitrary
+      local path -- including another project's own ``.git`` history
+      elsewhere under ``WORKSPACE_ROOT``, a real cross-project
+      information disclosure this app has no other boundary against.
+    - **SSRF**: a hostname that resolves to a loopback, private
+      (RFC1918), link-local, or otherwise non-public address would let
+      a request make *this server* open a connection to its own
+      internal network -- including sibling containers on the same
+      Docker network -- under the guise of "cloning a git repo".
+
+    Args:
+        remote_url: The user-supplied remote URL to validate.
+
+    Raises:
+        ValueError: If the URL is malformed, uses a disallowed scheme,
+            or resolves to a non-public address.
+    """
+    if any(character in remote_url for character in ("\x00", "\n", "\r")):
+        raise ValueError("remote_url contains invalid characters")
+
+    scheme, host = _extract_clone_scheme_and_host(remote_url)
+
+    if scheme not in _ALLOWED_CLONE_SCHEMES:
+        raise ValueError(
+            f"remote_url scheme {scheme!r} is not allowed -- use "
+            "https, ssh, or git"
+        )
+
+    try:
+        resolved = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        # Not a security concern either way -- the clone attempt right
+        # after this will fail on its own with a clear "could not
+        # clone" error.
+        return
+
+    for _family, _kind, _proto, _canonname, sockaddr in resolved:
+        address = ipaddress.ip_address(sockaddr[0])
+        if (
+            address.is_loopback
+            or address.is_private
+            or address.is_link_local
+            or address.is_reserved
+            or address.is_multicast
+            or address.is_unspecified
+        ):
+            raise ValueError(
+                f"remote_url host {host!r} resolves to a non-public "
+                f"address ({address}) -- cloning from internal/private "
+                "network addresses is not allowed"
+            )
+
+
+def _clone_project_repo(remote_url: str, project_root: Path) -> None:
+    """Clone a remote git repository as a new project's initial content.
+
+    Unlike ``_init_git_repo`` (best-effort, swallows failures), a
+    failed clone is a hard error here: the user explicitly asked to
+    link this project to that remote, so silently falling back to a
+    blank project would be surprising and wrong.
+
+    Args:
+        remote_url: Any git-clonable URL (HTTPS or SSH).
+        project_root: Already-created, empty directory to clone into.
+
+    Raises:
+        ValueError: If ``remote_url`` fails validation (see
+            ``_validate_clone_url``), or the clone fails (bad URL,
+            auth failure, network error, not a git repository, etc.).
+    """
+    import git
+
+    from ..services.git_history import redact_url_credentials
+
+    _validate_clone_url(remote_url)
+
+    try:
+        git.Repo.clone_from(remote_url, project_root)
+    except Exception as exc:
+        detail = (
+            exc.stderr.strip()
+            if isinstance(exc, git.GitCommandError) and exc.stderr
+            else str(exc)
+        )
+        safe_url = redact_url_credentials(remote_url)
+        safe_detail = redact_url_credentials(detail)
+        raise ValueError(f"could not clone {safe_url!r}: {safe_detail}") from exc
+
+
+def _detect_main_file(project_root: Path) -> str:
+    """Best-effort guess at a freshly-cloned project's main ``.tex`` file.
+
+    Args:
+        project_root: The cloned project's root directory.
+
+    Returns:
+        str: ``config.DEFAULT_MAIN_FILE`` if present at the root, else
+        the alphabetically-first top-level ``.tex`` file, else
+        ``config.DEFAULT_MAIN_FILE`` as a last-resort guess (the same
+        default a blank project assumes) even though it may not exist
+        -- compiling or opening it will then fail with a clear,
+        existing error rather than this function fabricating content.
+    """
+    if (project_root / config.DEFAULT_MAIN_FILE).is_file():
+        return config.DEFAULT_MAIN_FILE
+
+    tex_files = sorted(
+        entry.name
+        for entry in project_root.iterdir()
+        if entry.is_file() and entry.suffix == ".tex"
+    )
+    return tex_files[0] if tex_files else config.DEFAULT_MAIN_FILE
+
+
+def _commit_cloned_project_metadata(project_root: Path) -> None:
+    """Commit ``.project.json`` immediately after writing it post-clone.
+
+    Best-effort, mirroring ``_init_git_repo``'s own commit, and a
+    no-op if the clone already had an identical file: without this,
+    the metadata sidecar this app needs would sit as an uncommitted
+    change in the project's working tree, getting silently bundled
+    into whatever the user saves as their own first version.
+
+    Args:
+        project_root: The cloned project's root directory, already a
+            git repository.
+    """
+    try:
+        import git
+
+        repo = git.Repo(project_root)
+        if not repo.is_dirty(untracked_files=True):
+            return
+        repo.index.add([_PROJECT_METADATA_FILENAME])
+        repo.index.commit(
+            "Link project metadata", author=git.Actor("webapp", "webapp@localhost")
+        )
+    except Exception as exc:  # noqa: BLE001 - git must never block creation
+        logger.warning(
+            "failed to commit project metadata at %s: %s", project_root, exc
+        )
+
+
 _FILESYSTEM_ERROR_HINT = (
     "Filesystem error: {error}. If this project's files were created via "
     "Docker and you're now running without Docker (or vice versa), they "
@@ -285,18 +486,31 @@ def list_projects() -> list[ProjectSummary]:
 
 @router.post("", response_model=ProjectSummary)
 def create_project(payload: ProjectCreate) -> ProjectSummary:
-    """Create a new project, optionally seeded from a catalog template.
+    """Create a new project: blank, from a catalog template, or cloned.
 
     Args:
-        payload: Project name and optional ``template_id``.
+        payload: Project name, and at most one of ``template_id`` or
+            ``remote_url``.
 
     Returns:
         The ProjectSummary for the newly created project.
 
     Raises:
         HTTPException: 400 if the generated project id is somehow
-            invalid, 500 if a unique id cannot be generated.
+            invalid, if both ``template_id`` and ``remote_url`` are
+            given, or (when ``remote_url`` is given) if the clone
+            fails; 500 if a unique id cannot be generated.
     """
+    if payload.remote_url and payload.template_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "remote_url and template_id are mutually exclusive -- a "
+                "cloned project's content comes from the remote, not a "
+                "template"
+            ),
+        )
+
     config.ensure_dirs()
 
     project_id = _generate_project_id(payload.name)
@@ -307,6 +521,31 @@ def create_project(payload: ProjectCreate) -> ProjectSummary:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     project_root.mkdir(parents=True, exist_ok=False)
+
+    if payload.remote_url:
+        try:
+            _clone_project_repo(payload.remote_url, project_root)
+        except ValueError as exc:
+            shutil.rmtree(project_root, ignore_errors=True)
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        main_file = _detect_main_file(project_root)
+        existing_metadata = _read_project_metadata(project_root)
+        created_at = (
+            float(existing_metadata["created_at"])
+            if existing_metadata and "created_at" in existing_metadata
+            else time.time()
+        )
+
+        _write_project_metadata(
+            project_root,
+            {"name": payload.name, "created_at": created_at, "main_file": main_file},
+        )
+        _commit_cloned_project_metadata(project_root)
+
+        return ProjectSummary(
+            id=project_id, name=payload.name, created_at=created_at, main_file=main_file
+        )
 
     template_applied = False
     if payload.template_id is not None:

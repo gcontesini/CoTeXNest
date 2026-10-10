@@ -34,6 +34,12 @@ run: dev
 test:
   uv run pytest -q
 
+# Run the frontend's pure-logic JS tests (spell-check tokenizer/edit-
+# distance) via Node's own built-in test runner -- no npm install, no
+# bundler, consistent with this project having no Node toolchain.
+test-js:
+  node --test tests/js/*.test.js
+
 # Run the test suite with a coverage report.
 test-cov:
   uv run pytest --cov=src/webapp -q

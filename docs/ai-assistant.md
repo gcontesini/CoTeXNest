@@ -66,6 +66,30 @@ Open the Assistant panel's **Settings** tab to choose:
     so it's retried automatically once everything else is also
     exhausted. A toast announces a switch like this when it happens.
 
+### Reliability: chat and compile-error fixing never hit a hard timeout
+
+A provider call -- local or external -- can legitimately take longer
+than any fixed timeout short enough to still be reasonable to block an
+HTTP request on. This was a real, live-reproduced failure, not a
+hypothetical: a realistic `fix_compile_error` prompt (a full file plus
+a compile log, which can trigger a second sequential call via its own
+retry) exceeded a 60-second timeout against a CPU-only local model
+under load, and separately exceeded even 180 seconds against a slow
+external provider, both ending in a `503 ... read operation timed out`
+the user actually saw.
+
+Chat and compile-error fixing now start a background job
+(`POST .../assistant/chat/start`, `POST .../assistant/fix-compile-error/start`)
+and the frontend polls for the result
+(`GET /api/assistant/jobs/chat/{job_id}`, `.../jobs/fix-compile-error/{job_id}`)
+instead of waiting on a single request. The "Thinking…" indicator in
+the chat log now just keeps showing for as long as it actually takes
+-- verified live recovering a real answer at 82 seconds, past the old
+ceiling that used to kill the exact same request. The original
+synchronous endpoints (`POST .../assistant/chat`,
+`.../assistant/fix-compile-error`) still exist, for direct API/curl
+use, and still carry a (now more generous, 180s) timeout of their own.
+
 ### A note on model capability
 
 The propose/apply protocol asks the model to reply with a JSON object
@@ -134,6 +158,19 @@ manual turn, marked "Auto-suggested" -- never applied automatically. A
 scan that fails (provider not configured, not reachable, rate-limited)
 fails silently: it must never surface a toast every 15 seconds just
 because a provider isn't set up yet.
+
+**Rate-limit backoff.** A free-tier external provider's daily request
+quota can be startlingly low -- confirmed live, Gemini's free tier for
+`gemini-3.8-flash` allows **20 requests per day**, which a 15-second
+auto-scan loop exhausts in five minutes of normal editing, after which
+every retry for the rest of the day is guaranteed to fail the same
+way. When an auto-scan fails with a rate-limit/quota-flavored error,
+it now backs off for 10 minutes instead of retrying every 15 seconds
+into a quota that's already spent -- see `assistant-panel.js`'s
+`autoScanCooldownUntil`. This is a real, practical reason to prefer a
+local model (or a provider with a generous quota) as the *active*
+provider while leaving a free-tier external one configured only as a
+fallback, rather than the other way around.
 
 ## Compile-error fixing
 

@@ -157,6 +157,10 @@ function describeProposal(proposal) {
  *   Called after a proposal is successfully applied, so the caller
  *   can refresh the file tree/editor if the change touched the
  *   currently-open file.
+ * @param {(message: string) => void} [options.onError] - Called for
+ *   chat, compile-fix, and auto-scan failures, in addition to the
+ *   user-facing toast -- lets the caller keep a record (e.g. the Log
+ *   Files panel) without this module knowing that panel exists.
  * @returns {{ refreshSettings: () => Promise<void>, askAboutCompileError: (logText: string) => Promise<void> }}
  */
 export function createAssistantPanel({
@@ -169,6 +173,7 @@ export function createAssistantPanel({
   getCurrentFilePath,
   getCurrentEditorContent,
   onProposalApplied,
+  onError,
 }) {
   const conversation = [];
 
@@ -323,6 +328,7 @@ export function createAssistantPanel({
     } catch (error) {
       pendingBubble.remove();
       notify(`Assistant request failed: ${error.message}`, "error");
+      onError?.(error.message);
     } finally {
       submitButton.disabled = false;
     }
@@ -358,6 +364,7 @@ export function createAssistantPanel({
     } catch (error) {
       pendingBubble.remove();
       notify(`Assistant request failed: ${error.message}`, "error");
+      onError?.(error.message);
     }
   }
 
@@ -906,11 +913,23 @@ export function createAssistantPanel({
 
   // ─── Auto-scan (every 15s, only when content actually changed) ───
 
+  // A provider rate-limit/quota error is the one auto-scan failure
+  // worth backing off from rather than just trying again next tick:
+  // observed live, a free-tier quota as low as 20 requests/day is
+  // real and gets exhausted almost immediately by a 15-second poll
+  // loop, after which every retry is guaranteed to fail the same way
+  // until the quota resets -- hammering it every 15s the whole time
+  // accomplishes nothing and is exactly the kind of avoidable
+  // unreliability this was asked to be fixed.
+  const AUTO_SCAN_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
+  const RATE_LIMIT_MESSAGE_PATTERN = /\b429\b|rate.?limit|quota|resource_exhausted/i;
+
   let lastScannedContent = null;
   let autoScanBusy = false;
+  let autoScanCooldownUntil = 0;
 
   async function runAutoScanTick() {
-    if (autoScanBusy) {
+    if (autoScanBusy || Date.now() < autoScanCooldownUntil) {
       return;
     }
 
@@ -942,6 +961,14 @@ export function createAssistantPanel({
       }
     } catch (error) {
       console.warn("assistant auto-scan failed:", error.message);
+      onError?.(`Auto-scan: ${error.message}`);
+
+      if (RATE_LIMIT_MESSAGE_PATTERN.test(error.message)) {
+        autoScanCooldownUntil = Date.now() + AUTO_SCAN_RATE_LIMIT_COOLDOWN_MS;
+        console.warn(
+          `assistant auto-scan: backing off for ${AUTO_SCAN_RATE_LIMIT_COOLDOWN_MS / 60000}m after a rate-limit/quota error`,
+        );
+      }
     } finally {
       autoScanBusy = false;
     }

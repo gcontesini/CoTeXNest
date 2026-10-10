@@ -24,3 +24,9 @@ __pycache__/
 /docs/_build/
 
 .playwright-mcp/
+
+# Generated at startup (config.ensure_git_safe_directory()) -- redirects
+# git's "global" config scope away from any real ~/.gitconfig so a
+# clone/fetch/push never gets refused over a bind-mount ownership
+# mismatch. Local, environment-specific, not source.
+/.gitconfig-webapp

@@ -106,11 +106,28 @@ container's internal filesystem, a database only reachable through the
 API, or (for anything server-relevant) in browser-only storage, does
 not meet this bar.
 
-The one accepted exception today is the "author name" shown on saved
-versions, which lives in the browser's `localStorage`
-(`static/js/app.js`): it's a per-browser display preference, not
-project or application configuration, and carries no meaning outside
-the browser session that set it.
+The accepted exceptions today are all genuinely per-browser UI
+preferences, not project or application configuration -- none of them
+carry any meaning outside the browser session that set them, and none
+of them are something a second person opening the same project would
+expect to inherit:
+
+- The "author name" shown on saved versions (`static/js/app.js`).
+- Appearance settings from the Settings dialog -- theme, application
+  font/size, editor syntax color scheme, indentation size, and the
+  highlight-current-line/highlight-matching-brackets toggles (all in
+  `static/js/settings-modal.js`).
+- The personal spell-check dictionary -- words learned via the
+  editor's right-click "Learn spelling" or added directly in Settings
+  (`static/js/spellcheck.js`). The *English dictionary itself* is
+  different: that's bundled, read-only application data shipped with
+  every deployment (`static/data/dictionary-en.txt`), not per-browser
+  state, so it lives as a normal static asset rather than in
+  localStorage.
+- The session-only Log Files list (compile/assistant error history
+  shown in the Log Files panel) -- deliberately *not* persisted at
+  all, not even to localStorage: it's a live diagnostic aid for the
+  current session, not something meant to survive a reload.
 
 ### TeX Live over Tectonic
 

@@ -50,6 +50,7 @@ app.add_middleware(
 def _on_startup() -> None:
     """Ensure the workspace/plugins volumes exist before serving traffic."""
     config.ensure_dirs()
+    config.ensure_git_safe_directory()
 
 
 app.include_router(projects.router)

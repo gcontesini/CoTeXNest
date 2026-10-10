@@ -7,7 +7,14 @@ dependencies = [
   "fastapi",
   "uvicorn[standard]",
   "pydantic>=2",
-  "gitpython",
+  # >=3.2.0 specifically: verified (by reading its actual source, not
+  # just the changelog) that this version's Repo.clone_from() rejects
+  # `ext::`-style remote-helper URLs and dangerous options like
+  # `--upload-pack` by default, and unconditionally inserts a literal
+  # `--` separator before the url/path positional arguments -- the
+  # routers/projects.py clone-on-create feature (a user-supplied
+  # remote_url reaching clone_from) depends on these protections.
+  "gitpython>=3.2.0",
   "python-multipart",
   "httpx",
 ]
@@ -24,6 +31,20 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's parameter-marker functions (File/Query/Depends/Body/Form)
+# are meant to be called in a default argument -- that's how FastAPI's
+# own signature introspection recognizes the parameter's kind. B008
+# otherwise flags this as the mutable-default-argument antipattern it
+# was designed to catch, which this isn't.
+extend-immutable-calls = [
+  "fastapi.File",
+  "fastapi.Query",
+  "fastapi.Depends",
+  "fastapi.Body",
+  "fastapi.Form",
+]
 
 [build-system]
 requires = ["hatchling"]

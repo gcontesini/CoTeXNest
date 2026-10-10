@@ -8,8 +8,10 @@ disk is never touched.
 from __future__ import annotations
 
 import json
+import socket
 from pathlib import Path
 
+import git
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -17,6 +19,30 @@ from fastapi.testclient import TestClient
 from webapp import config
 from webapp.routers import projects
 from webapp.services import project_files
+
+_GIT_AUTHOR = git.Actor("tester", "tester@localhost")
+
+
+def _make_source_repo(
+    path: Path, files: dict[str, str], with_project_json: dict[str, object] | None = None
+) -> Path:
+    """Build a real local git repo at ``path``, cloneable via a file path URL."""
+    path.mkdir(parents=True)
+    repo = git.Repo.init(path)
+
+    for name, content in files.items():
+        file_path = path / name
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+
+    if with_project_json is not None:
+        (path / ".project.json").write_text(
+            json.dumps(with_project_json), encoding="utf-8"
+        )
+
+    repo.index.add(["."])
+    repo.index.commit("Initial commit", author=_GIT_AUTHOR, committer=_GIT_AUTHOR)
+    return path
 
 _FAKE_CATALOG = [
     {
@@ -108,6 +134,203 @@ def test_create_project_with_unknown_template_falls_back_to_default(
     assert "Hello, world!" in (project_dir / "main.tex").read_text(
         encoding="utf-8"
     )
+
+
+# ─── _validate_clone_url: scheme allowlist + SSRF guard ───
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://github.com/octocat/Hello-World.git",
+        "git@github.com:octocat/Hello-World.git",
+        "ssh://git@github.com/octocat/Hello-World.git",
+        "git://github.com/octocat/Hello-World.git",
+    ],
+)
+def test_validate_clone_url_accepts_well_known_host_patterns(
+    remote_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # This suite never makes a real network call -- a public IP is
+    # simulated for the resolution step so this test (scheme/shorthand
+    # parsing accepted, then passed the SSRF check) doesn't depend on
+    # live DNS.
+    monkeypatch.setattr(
+        socket, "getaddrinfo", lambda host, port: [(socket.AF_INET, None, None, "", ("93.184.216.34", 0))]
+    )
+    projects._validate_clone_url(remote_url)
+
+
+@pytest.mark.parametrize(
+    "remote_url,expected_message",
+    [
+        ("file:///etc/passwd", "scheme"),
+        ("file:///app/workspace/other-project/.git", "scheme"),
+        ("/absolute/local/path", "could not parse a host"),
+        ("relative/local/path", "could not parse a host"),
+        ("http://example.com/repo.git", "scheme"),
+        ("ext::sh -c touch /tmp/pwned", "scheme"),
+    ],
+)
+def test_validate_clone_url_rejects_disallowed_schemes(
+    remote_url: str, expected_message: str
+) -> None:
+    with pytest.raises(ValueError, match=expected_message):
+        projects._validate_clone_url(remote_url)
+
+
+@pytest.mark.parametrize(
+    "remote_url",
+    [
+        "https://127.0.0.1/repo.git",
+        "https://localhost/repo.git",
+        "https://[::1]/repo.git",
+        "ssh://10.0.0.5/repo.git",
+        "ssh://172.17.0.2/repo.git",  # a typical Docker bridge-network address
+        "ssh://192.168.1.1/repo.git",
+        "https://169.254.169.254/repo.git",  # cloud metadata endpoint
+        "git@127.0.0.1:owner/repo.git",
+    ],
+)
+def test_validate_clone_url_rejects_private_and_loopback_addresses(
+    remote_url: str,
+) -> None:
+    with pytest.raises(ValueError, match="non-public address"):
+        projects._validate_clone_url(remote_url)
+
+
+def test_validate_clone_url_rejects_embedded_control_characters() -> None:
+    with pytest.raises(ValueError, match="invalid characters"):
+        projects._validate_clone_url("https://github.com/x/y.git\nEvilHeader: x")
+
+
+def test_validate_clone_url_unresolvable_host_is_not_a_validation_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # DNS failure isn't a security concern -- it's left for the normal
+    # clone attempt to fail on its own with a clear error. Mocked
+    # (rather than relying on a real, guaranteed-unresolvable hostname)
+    # so this doesn't depend on network/DNS access being available at
+    # all in the environment running this suite.
+    def fake_getaddrinfo(host: str, port: object) -> list[object]:
+        raise socket.gaierror("mocked: name or service not known")
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    projects._validate_clone_url("https://this-host-should-not-resolve.invalid/repo.git")
+
+
+@pytest.fixture
+def bypass_clone_url_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Skip the scheme/SSRF checks for tests that clone a local path.
+
+    ``_validate_clone_url`` deliberately rejects bare local paths (the
+    same as ``file://``, which it also rejects) -- see
+    ``test_validate_clone_url_*`` below for that behavior itself. The
+    tests here are about what happens *after* a clone succeeds (main
+    file detection, metadata merging, cleanup on failure), for which a
+    local temp-dir repo is just a fast, hermetic stand-in for a real
+    git host -- not something meant to exercise the security boundary.
+    """
+    monkeypatch.setattr(projects, "_validate_clone_url", lambda remote_url: None)
+
+
+def test_create_project_clones_remote(
+    client: TestClient, tmp_path: Path, bypass_clone_url_validation: None
+) -> None:
+    source = _make_source_repo(
+        tmp_path / "source-repo",
+        {"main.tex": "% cloned content\n", "chapters/intro.tex": "Intro\n"},
+    )
+
+    response = client.post(
+        "/api/projects",
+        json={"name": "Cloned Paper", "remote_url": str(source)},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    assert body["name"] == "Cloned Paper"
+    assert body["main_file"] == "main.tex"
+
+    project_dir = config.WORKSPACE_ROOT / body["id"]
+    assert (project_dir / "main.tex").read_text(encoding="utf-8") == "% cloned content\n"
+    assert (project_dir / "chapters" / "intro.tex").is_file()
+    assert (project_dir / ".project.json").is_file()
+
+    repo = git.Repo(project_dir)
+    assert repo.remotes.origin.url == str(source)
+    # The clone's own history plus our metadata commit on top.
+    assert repo.head.commit.message == "Link project metadata"
+    assert not repo.is_dirty(untracked_files=True)
+
+
+def test_create_project_clone_preserves_existing_metadata(
+    client: TestClient, tmp_path: Path, bypass_clone_url_validation: None
+) -> None:
+    source = _make_source_repo(
+        tmp_path / "source-repo",
+        {"thesis.tex": "% has its own main file\n"},
+        with_project_json={
+            "name": "Original Name",
+            "created_at": 12345.0,
+            "main_file": "thesis.tex",
+        },
+    )
+
+    response = client.post(
+        "/api/projects",
+        json={"name": "My Local Name", "remote_url": str(source)},
+    )
+    assert response.status_code == 200
+
+    body = response.json()
+    # The user's own name wins; the original creation time and the
+    # already-correct main_file survive from the shared .project.json.
+    assert body["name"] == "My Local Name"
+    assert body["created_at"] == 12345.0
+    assert body["main_file"] == "thesis.tex"
+
+
+def test_create_project_clone_detects_main_file_without_main_tex(
+    client: TestClient, tmp_path: Path, bypass_clone_url_validation: None
+) -> None:
+    source = _make_source_repo(tmp_path / "source-repo", {"paper.tex": "content\n"})
+
+    response = client.post(
+        "/api/projects", json={"name": "No Main Tex", "remote_url": str(source)}
+    )
+    assert response.status_code == 200
+    assert response.json()["main_file"] == "paper.tex"
+
+
+def test_create_project_clone_failure_cleans_up_and_returns_400(
+    client: TestClient, tmp_path: Path, bypass_clone_url_validation: None
+) -> None:
+    bogus_path = tmp_path / "does-not-exist"
+
+    response = client.post(
+        "/api/projects", json={"name": "Bad Clone", "remote_url": str(bogus_path)}
+    )
+    assert response.status_code == 400
+
+    # No orphaned project directory left behind under workspace/.
+    assert list(config.WORKSPACE_ROOT.iterdir()) == []
+
+
+def test_create_project_rejects_remote_url_with_template_id(
+    client: TestClient, tmp_path: Path
+) -> None:
+    source = _make_source_repo(tmp_path / "source-repo", {"main.tex": "x\n"})
+
+    response = client.post(
+        "/api/projects",
+        json={
+            "name": "Conflicting",
+            "template_id": "article-template",
+            "remote_url": str(source),
+        },
+    )
+    assert response.status_code == 400
 
 
 def test_list_projects(client: TestClient) -> None:
