@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config
-from .routers import assistant, history, packages, projects
+from .routers import assistant, git_remote, history, packages, projects
 from .routers import compile as compile_router
 
 _STATIC_DIR: Path = Path(__file__).resolve().parent / "static"
@@ -32,7 +32,7 @@ app: FastAPI = FastAPI(
 )
 
 # This app is designed to run on a trusted local network behind, at
-# most, a thin reverse-proxy container (see docker-compose.yml's
+# most, a thin reverse-proxy container (see docker/docker-compose.yml's
 # two-container split: a static-file/proxy "webfront" service in front
 # of this API). There is no user/session model to protect with a
 # stricter policy, so permissive CORS keeps local development (hitting
@@ -56,6 +56,7 @@ def _on_startup() -> None:
 app.include_router(projects.router)
 app.include_router(compile_router.router)
 app.include_router(history.router)
+app.include_router(git_remote.router)
 app.include_router(packages.router)
 app.include_router(assistant.router)
 

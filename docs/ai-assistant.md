@@ -2,7 +2,7 @@
 
 The assistant is a chat panel docked at the bottom of the window (see
 [editor-ui.md](editor-ui.md#menu-bar)) backed by either a local Ollama
-model (a separate container, `ai-assistant` in `docker-compose.yml`) or
+model (a separate container, `ai-assistant` in `docker/docker-compose.yml`) or
 a user-configured external API (Anthropic- or OpenAI-compatible).
 Either way, it can explain LaTeX problems, suggest improvements, and
 propose file changes -- but it never writes to a file on its own.
@@ -141,7 +141,7 @@ the same request, the same prompt, a more capable model.
 
 ## Writing style
 
-The Settings tab also accepts one or more writing samples. Submitting
+Settings → AI Assistant also accepts one or more writing samples. Submitting
 them asks the model to synthesize a style profile (tone, vocabulary,
 sentence structure), which is persisted in the same config file and
 included in every future prompt -- so the assistant's own phrasing (and

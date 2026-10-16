@@ -2,6 +2,8 @@
 # This is separate from the justfile at the monorepo root, which
 # belongs to the older, unrelated Tauri desktop app.
 
+compose_file := "docker/docker-compose.yml"
+
 # Show all available recipes.
 default:
   @just --list
@@ -63,42 +65,42 @@ format:
 # Build the backend image (LaTeX rendering, git history, package
 # manager, REST API) locally, without starting it.
 docker-build-backend:
-  docker build -t latex-webapp-backend -f Dockerfile .
+  docker build -t latex-webapp-backend -f docker/Dockerfile .
 
 # Build the webfront image (static editor UI + reverse proxy to the
 # backend) locally, without starting it.
 docker-build-webfront:
-  docker build -t latex-webapp-webfront -f webfront.Dockerfile .
+  docker build -t latex-webapp-webfront -f docker/webfront.Dockerfile .
 
 # Build both images via docker compose (uses its own build cache/tags).
 docker-build:
-  docker compose build
+  docker compose -f {{compose_file}} build
 
 # Build (if needed) and start both containers via docker compose, in
 # the background: "backend" (rendering/history/packages API) and
 # "webfront" (editor UI, proxying /api to "backend"). Open the app at
 # http://localhost:8000 once both report healthy.
 up:
-  docker compose up --build -d
+  docker compose -f {{compose_file}} up --build -d
 
 # Alias for `up` — build and deploy both containers locally via Docker.
 deploy: up
 
 # Stop and remove the docker compose containers.
 down:
-  docker compose down
+  docker compose -f {{compose_file}} down
 
 # Follow both containers' logs.
 logs:
-  docker compose logs -f
+  docker compose -f {{compose_file}} logs -f
 
 # Follow only the backend's logs (rendering/history/package errors show up here).
 logs-backend:
-  docker compose logs -f backend
+  docker compose -f {{compose_file}} logs -f backend
 
 # Follow only the webfront's logs (nginx access/error log).
 logs-webfront:
-  docker compose logs -f webfront
+  docker compose -f {{compose_file}} logs -f webfront
 
 # Remove local virtual environment and cache directories.
 clean:

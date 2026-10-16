@@ -236,6 +236,16 @@ pre {
   background: var(--color-bg-sunken);
 }
 
+.menubar-dropdown-item[aria-checked]::before {
+  content: "";
+  display: inline-block;
+  width: 1.1em;
+}
+
+.menubar-dropdown-item[aria-checked="true"]::before {
+  content: "\2713";
+}
+
 .menubar-separator {
   border-top: 1px solid var(--color-border);
   margin: var(--space-1) 0;
@@ -326,13 +336,42 @@ pre {
 /* ─── Layout ─── */
 
 .layout {
-  display: grid;
-  grid-template-columns: auto 1fr;
+  display: flex;
   min-height: 0;
   overflow: hidden;
 }
 
+.sidebar-reopen-bar {
+  width: 22px;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  background: var(--color-bg-elevated);
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.sidebar-reopen-bar:hover {
+  background: var(--color-border);
+}
+
+.sidebar-resizer {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.dragging {
+  background: var(--color-border);
+}
+
+.sidebar-resizer.hidden {
+  display: none;
+}
+
 .sidebar {
+  flex: 0 0 auto;
   width: 220px;
   background: var(--color-bg-elevated);
   border-right: 1px solid var(--color-border);
@@ -343,7 +382,7 @@ pre {
 }
 
 .sidebar.collapsed {
-  width: 0;
+  width: 0 !important;
   overflow: hidden;
   border-right: none;
 }
@@ -517,6 +556,7 @@ pre {
 
 .workspace {
   display: flex;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -1406,6 +1446,11 @@ dialog::backdrop {
   flex-direction: column;
   gap: var(--space-2);
   margin-bottom: var(--space-5);
+}
+
+.git-action-row {
+  display: flex;
+  gap: var(--space-2);
 }
 
 .settings-section h3 {

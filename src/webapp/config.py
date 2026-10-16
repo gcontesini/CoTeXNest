@@ -73,7 +73,7 @@ ASSISTANT_CONFIG_PATH: Path = ASSISTANT_CONFIG_ROOT / "settings.json"
 
 # Base URL of the local Ollama server the AI assistant talks to when its
 # provider is "local". Defaults to Ollama's own default port on
-# localhost for "just dev"; docker-compose.yml overrides this to the
+# localhost for "just dev"; docker/docker-compose.yml overrides this to the
 # "ai-assistant" service's container-network address.
 OLLAMA_BASE_URL: str = os.environ.get(
     "WEBAPP_OLLAMA_BASE_URL", "http://localhost:11434"

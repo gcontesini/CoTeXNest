@@ -2,7 +2,7 @@
  * settings-modal.js
  *
  * The app-wide Settings dialog: a left-side list of categories
- * (General, Editor, AI Assistant, Dictionary) next to a right-side
+ * (General, Editor, AI Assistant, Dictionary, Git) next to a right-side
  * panel of controls for whichever one is selected.
  *
  * Every setting here is a per-browser UI preference -- app theme/font,
@@ -12,16 +12,38 @@
  * uses (see docs/architecture.md). None of it is project data, so
  * none of it needs to be visible outside the browser that set it.
  *
- * The "AI Assistant" category deliberately doesn't duplicate
- * assistant-panel.js's own Settings tab -- it points at it instead,
- * so there is exactly one place that UI is implemented.
+ * The "AI Assistant" category hosts assistant-panel.js's settings UI
+ * (provider, keys, fallbacks, writing style) directly: the panel
+ * renders into a container this dialog owns and shows on demand, so
+ * there is exactly one implementation and the chat dock stays
+ * chat-only.
  */
 
 import {
   getPersonalDictionary,
   addToPersonalDictionary,
   removeFromPersonalDictionary,
+  listDictionaries,
+  getActiveDictionaryId,
+  setActiveDictionary,
+  addCustomDictionary,
+  removeCustomDictionary,
 } from "./spellcheck.js";
+import {
+  getGitInfo,
+  setGitRemote,
+  setGitCredentials,
+  clearGitCredentials,
+  gitFetch,
+  gitPull,
+  gitPush,
+  listGitBranches,
+  switchGitBranch,
+} from "./api.js";
+
+// Shared with app.js, which prompts for the name on first commit; the
+// Git settings category lets it be set or changed up front.
+export const AUTHOR_NAME_STORAGE_KEY = "latex-writer:author-name";
 
 const STORAGE_KEYS = {
   theme: "latex-writer-theme", // "system" | "dark" | "light"
@@ -130,10 +152,15 @@ function formRow(labelText, control) {
  * @param {() => object | null} options.getEditor - Returns the
  *   currently mounted editor instance (see editor.js), or null if
  *   none is open.
+ * @param {() => string | null} options.getProjectId - Returns the id
+ *   of the open project, or null; the Git category acts on it.
  * @param {(message: string, kind?: string) => void} options.notify
- * @param {() => void} options.onOpenAssistantSettings - Called when
- *   the user clicks through from the "AI Assistant" category; closes
- *   this dialog and opens the assistant dock's own Settings tab.
+ * @param {() => void} options.renderAssistantSettings - Renders the
+ *   assistant's settings UI into the container passed as
+ *   `assistantSettingsEl`.
+ * @param {HTMLElement} options.assistantSettingsEl - Persistent
+ *   container the assistant panel renders its settings into; this
+ *   dialog attaches it to `bodyEl` for the "AI Assistant" category.
  * @returns {{ open: () => void }}
  */
 export function createSettingsModal({
@@ -141,8 +168,10 @@ export function createSettingsModal({
   bodyEl,
   titleEl,
   getEditor,
+  getProjectId,
   notify,
-  onOpenAssistantSettings,
+  renderAssistantSettings,
+  assistantSettingsEl,
 }) {
   const navButtons = Array.from(dialogEl.querySelectorAll(".settings-nav-item"));
   let activeCategory = "general";
@@ -289,37 +318,83 @@ export function createSettingsModal({
   }
 
   function renderAssistant() {
-    bodyEl.replaceChildren();
-    const section = createElement("div", "settings-section");
-    section.appendChild(
-      createElement(
-        "p",
-        null,
-        "Provider, model, API keys, fallback providers, and writing " +
-          "style live in the Assistant panel's own Settings tab, so " +
-          "there's exactly one place that configures them.",
-      ),
-    );
-    const openButton = createElement("button", "btn btn-primary", "Open Assistant Settings");
-    openButton.type = "button";
-    openButton.addEventListener("click", () => {
-      dialogEl.close();
-      onOpenAssistantSettings();
-    });
-    section.appendChild(openButton);
-    bodyEl.appendChild(section);
+    bodyEl.replaceChildren(assistantSettingsEl);
+    assistantSettingsEl.classList.remove("hidden");
+    renderAssistantSettings();
   }
 
   function renderDictionary() {
     bodyEl.replaceChildren();
 
+    const languageSection = createElement("div", "settings-section");
+    languageSection.appendChild(createElement("h3", null, "Language dictionary"));
+
+    const languageSelect = document.createElement("select");
+    for (const dictionary of listDictionaries()) {
+      const option = document.createElement("option");
+      option.value = dictionary.id;
+      option.textContent = dictionary.label;
+      option.selected = dictionary.id === getActiveDictionaryId();
+      languageSelect.appendChild(option);
+    }
+    languageSelect.addEventListener("change", async () => {
+      await setActiveDictionary(languageSelect.value);
+      renderDictionary();
+    });
+    languageSection.appendChild(formRow("Spell-check language", languageSelect));
+
+    const importedDictionaries = listDictionaries().filter((d) => !d.builtin);
+    for (const dictionary of importedDictionaries) {
+      const row = createElement("div", "fallback-profile-row");
+      row.appendChild(createElement("span", null, dictionary.label));
+      const removeButton = createElement("button", "btn btn-icon", "Remove");
+      removeButton.type = "button";
+      removeButton.addEventListener("click", async () => {
+        await removeCustomDictionary(dictionary.id);
+        renderDictionary();
+      });
+      row.appendChild(removeButton);
+      languageSection.appendChild(row);
+    }
+
+    languageSection.appendChild(
+      createElement(
+        "p",
+        null,
+        "English (US) and English (UK) are bundled. Add another " +
+          "language by importing a plain-text word list with one word " +
+          "per line.",
+      ),
+    );
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".txt,.dic,.dict,text/plain";
+    fileInput.addEventListener("change", async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+
+      try {
+        const label = file.name.replace(/\.[^.]+$/, "");
+        const id = addCustomDictionary(label, await file.text());
+        await setActiveDictionary(id);
+        notify?.(`Added dictionary "${label}" and switched to it.`, "success");
+      } catch (error) {
+        notify?.(`Could not add dictionary: ${error.message}`, "error");
+      }
+      renderDictionary();
+    });
+    languageSection.appendChild(formRow("Add dictionary file", fileInput));
+    bodyEl.appendChild(languageSection);
+
     const section = createElement("div", "settings-section");
+    section.appendChild(createElement("h3", null, "Personal dictionary"));
     section.appendChild(
       createElement(
         "p",
         null,
-        "Spell-check is English only -- words you \"Learn spelling\" " +
-          "on in the editor (or add here) are never flagged again.",
+        "Words you \"Learn spelling\" on in the editor (or add here) " +
+          "are never flagged again, in any language.",
       ),
     );
 
@@ -371,11 +446,208 @@ export function createSettingsModal({
     bodyEl.appendChild(section);
   }
 
+  // ─── Git (remote, identity, credentials, branches, fetch/pull/push) ───
+
+  function gitSection(title) {
+    const section = createElement("div", "settings-section");
+    section.appendChild(createElement("h3", null, title));
+    return section;
+  }
+
+  function gitButton(label, onClick, className = "btn") {
+    const button = createElement("button", className, label);
+    button.type = "button";
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  function describeGitStatus(info) {
+    if (!info.remote_url) return "No remote configured.";
+    if (!info.branch) return "Detached HEAD: switch to a branch.";
+    if (!info.remote_branch_exists) {
+      return `Branch ${info.branch} is not on the remote yet. Push to publish it.`;
+    }
+    return `Branch ${info.branch}: ${info.ahead} to push, ${info.behind} to pull (as of the last fetch).`;
+  }
+
+  async function renderGit() {
+    bodyEl.replaceChildren();
+    const projectId = getProjectId();
+
+    if (!projectId) {
+      bodyEl.appendChild(
+        createElement("p", "empty-state", "Open a project to configure its Git repository."),
+      );
+      return;
+    }
+
+    let info;
+    let branches;
+    try {
+      [info, branches] = await Promise.all([getGitInfo(projectId), listGitBranches(projectId)]);
+    } catch (error) {
+      notify(error.message, "error");
+      return;
+    }
+
+    if (activeCategory !== "git") return;
+
+    bodyEl.replaceChildren();
+
+    async function run(action, successMessage) {
+      try {
+        const result = await action();
+        notify(result?.message ?? successMessage, "success");
+      } catch (error) {
+        notify(error.message, "error");
+      }
+      if (activeCategory === "git") await renderGit();
+    }
+
+    const repoSection = gitSection("Repository");
+    const urlInput = createElement("input");
+    urlInput.type = "text";
+    urlInput.placeholder = "https://github.com/owner/repo.git";
+    urlInput.value = info.remote_url ?? "";
+    repoSection.appendChild(formRow("Remote URL (origin)", urlInput));
+    repoSection.appendChild(
+      gitButton("Save remote URL", () =>
+        run(() => setGitRemote(projectId, urlInput.value), "Remote URL saved."),
+      ),
+    );
+    repoSection.appendChild(createElement("p", "package-note", describeGitStatus(info)));
+    bodyEl.appendChild(repoSection);
+
+    const identitySection = gitSection("Identity");
+    const nameInput = createElement("input");
+    nameInput.type = "text";
+    nameInput.value = localStorage.getItem(AUTHOR_NAME_STORAGE_KEY) ?? "";
+    nameInput.placeholder = "Your name";
+    nameInput.addEventListener("change", () => {
+      const name = nameInput.value.trim();
+      if (name) {
+        localStorage.setItem(AUTHOR_NAME_STORAGE_KEY, name);
+        notify("Name saved.", "success");
+      }
+    });
+    identitySection.appendChild(formRow("Your name (author of saved versions)", nameInput));
+    bodyEl.appendChild(identitySection);
+
+    const credentialsSection = gitSection("Credentials");
+    const usernameInput = createElement("input");
+    usernameInput.type = "text";
+    usernameInput.autocomplete = "off";
+    usernameInput.value = info.credential_username ?? "";
+    const tokenInput = createElement("input");
+    tokenInput.type = "password";
+    tokenInput.autocomplete = "off";
+    tokenInput.placeholder = info.has_credentials ? "Stored (enter a new token to replace)" : "";
+    credentialsSection.append(
+      formRow("Username", usernameInput),
+      formRow("Personal access token", tokenInput),
+    );
+    const credentialButtons = createElement("div", "form-row");
+    credentialButtons.append(
+      gitButton(
+        "Save credentials",
+        () =>
+          run(
+            () => setGitCredentials(projectId, usernameInput.value.trim(), tokenInput.value.trim()),
+            "Credentials saved.",
+          ),
+        "btn btn-primary",
+      ),
+      gitButton(
+        "Remove credentials",
+        () => run(() => clearGitCredentials(projectId), "Credentials removed."),
+        "btn btn-danger",
+      ),
+    );
+    credentialsSection.appendChild(credentialButtons);
+    credentialsSection.appendChild(
+      createElement(
+        "p",
+        "package-note",
+        (info.has_credentials ? `Stored for ${info.credential_username ?? "a token-only login"}. ` : "") +
+          "https:// remotes only. The token is kept as plain text in this project's " +
+          ".git/config inside the workspace volume and is never shown again. Use a " +
+          "token limited to this repository.",
+      ),
+    );
+    bodyEl.appendChild(credentialsSection);
+
+    const branchSection = gitSection("Branch");
+    const branchSelect = createElement("select");
+    for (const name of branches.local) {
+      const option = createElement("option", null, name);
+      option.value = name;
+      option.selected = name === branches.current;
+      branchSelect.appendChild(option);
+    }
+    if (branches.remote_only.length > 0) {
+      const group = document.createElement("optgroup");
+      group.label = "Remote only (fetched)";
+      for (const name of branches.remote_only) {
+        const option = createElement("option", null, name);
+        option.value = name;
+        group.appendChild(option);
+      }
+      branchSelect.appendChild(group);
+    }
+    branchSection.appendChild(formRow("Current branch", branchSelect));
+    branchSection.appendChild(
+      gitButton("Switch branch", () =>
+        run(async () => {
+          await switchGitBranch(projectId, branchSelect.value, false);
+          return { message: `Switched to ${branchSelect.value}. Reopen files to see their content.` };
+        }),
+      ),
+    );
+    const newBranchInput = createElement("input");
+    newBranchInput.type = "text";
+    newBranchInput.placeholder = "feature/new-branch";
+    branchSection.appendChild(formRow("New branch (from current)", newBranchInput));
+    branchSection.appendChild(
+      gitButton("Create and switch", () =>
+        run(async () => {
+          await switchGitBranch(projectId, newBranchInput.value.trim(), true);
+          return { message: `Created and switched to ${newBranchInput.value.trim()}.` };
+        }),
+      ),
+    );
+    branchSection.appendChild(
+      createElement(
+        "p",
+        "package-note",
+        "Switching needs a clean working tree: save a version first. Run Fetch to refresh the remote-only list.",
+      ),
+    );
+    bodyEl.appendChild(branchSection);
+
+    const actionsSection = gitSection("Remote actions");
+    const actionRow = createElement("div", "git-action-row");
+    actionRow.append(
+      gitButton("Fetch", () => run(() => gitFetch(projectId))),
+      gitButton("Pull", () => run(() => gitPull(projectId))),
+      gitButton("Push", () => run(() => gitPush(projectId))),
+    );
+    actionsSection.appendChild(actionRow);
+    actionsSection.appendChild(
+      createElement(
+        "p",
+        "package-note",
+        "Pull rebases onto the remote branch and needs a clean working tree. Push publishes committed work only.",
+      ),
+    );
+    bodyEl.appendChild(actionsSection);
+  }
+
   const RENDERERS = {
     general: { title: "General", render: renderGeneral },
     editor: { title: "Editor", render: renderEditor },
     assistant: { title: "AI Assistant", render: renderAssistant },
     dictionary: { title: "Dictionary", render: renderDictionary },
+    git: { title: "Git", render: renderGit },
   };
 
   function showCategory(category) {

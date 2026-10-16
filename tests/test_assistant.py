@@ -1473,3 +1473,98 @@ def test_router_list_models_includes_configured_model_not_yet_pulled(
     # The configured model is always listed, even if Ollama hasn't
     # reported it as already pulled (so it's still selectable/pullable).
     assert ids == {"llama3.2:1b", "qwen2.5-coder:3b"}
+
+
+def _configure_primary_and_backup() -> None:
+    assistant.update_config(
+        AssistantConfigUpdate(
+            provider="external",
+            external_provider_kind="openai",
+            external_model="gpt-4o-mini",
+            external_api_key="sk-primary",
+        )
+    )
+    assistant.add_fallback_profile(
+        ExternalProviderProfileCreate(
+            label="backup",
+            provider_kind="openai",
+            model="deepseek-chat",
+            api_key="sk-backup",
+            base_url="https://api.deepseek.com",
+        )
+    )
+
+
+def test_external_503_is_retried_then_succeeds_without_failover(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_primary_and_backup()
+    monkeypatch.setattr(assistant.time, "sleep", lambda _s: None)
+    calls: list[str] = []
+
+    def fake_post(url: str, headers: dict[str, str], json: dict[str, Any], timeout: float) -> _FakeResponse:
+        calls.append(headers["Authorization"])
+        if len(calls) < 3:
+            return _FakeResponse({}, status_code=503, reason_phrase="Service Unavailable")
+        return _FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    reply, notice = assistant.generate_completion_with_notice(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert reply == "ok" and notice is None
+    assert calls == ["Bearer sk-primary"] * 3
+
+
+def test_external_persistent_503_fails_over_to_backup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_primary_and_backup()
+    monkeypatch.setattr(assistant.time, "sleep", lambda _s: None)
+
+    def fake_post(url: str, headers: dict[str, str], json: dict[str, Any], timeout: float) -> _FakeResponse:
+        if headers["Authorization"] == "Bearer sk-primary":
+            return _FakeResponse({}, status_code=503, reason_phrase="Service Unavailable")
+        return _FakeResponse({"choices": [{"message": {"content": "from backup"}}]})
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    reply, notice = assistant.generate_completion_with_notice(
+        [{"role": "user", "content": "hi"}]
+    )
+
+    assert reply == "from backup"
+    assert notice is not None
+
+
+def test_placeholder_fallback_model_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assistant.update_config(
+        AssistantConfigUpdate(
+            provider="external",
+            external_provider_kind="openai",
+            external_model="gpt-4o-mini",
+            external_api_key="sk-primary",
+        )
+    )
+    assistant.add_fallback_profile(
+        ExternalProviderProfileCreate(
+            label="nim", provider_kind="openai", model="REPLACE_ME", api_key="k"
+        )
+    )
+    monkeypatch.setattr(assistant.time, "sleep", lambda _s: None)
+    urls: list[str] = []
+
+    def fake_post(url: str, headers: dict[str, str], json: dict[str, Any], timeout: float) -> _FakeResponse:
+        urls.append(json["model"])
+        return _FakeResponse({}, status_code=503, reason_phrase="Service Unavailable")
+
+    monkeypatch.setattr("httpx.post", fake_post)
+
+    with pytest.raises(ConnectionError, match="503"):
+        assistant.generate_completion([{"role": "user", "content": "hi"}])
+
+    assert "REPLACE_ME" not in urls

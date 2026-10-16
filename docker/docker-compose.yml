@@ -1,17 +1,22 @@
+# Project name pinned so container/volume names stay the same now that
+# this file lives in docker/ (compose otherwise names the project after
+# this directory, which would orphan the ollama-models volume).
+name: t5_latex-writer_local
+
 services:
   # Renders LaTeX to PDF, serves the REST API, and owns every project's
   # git-backed version history. Everything that touches the filesystem
   # (workspace/, plugins/, assistant_config/) lives in this container.
   backend:
     build:
-      context: .
-      dockerfile: ./Dockerfile
+      context: ..
+      dockerfile: docker/Dockerfile
     ports:
       - "8001:8000" # optional: direct API access for debugging, bypassing the proxy
     volumes:
-      - ./workspace:/app/workspace
-      - ./plugins:/app/plugins
-      - ./assistant_config:/app/assistant_config
+      - ../workspace:/app/workspace
+      - ../plugins:/app/plugins
+      - ../assistant_config:/app/assistant_config
     environment:
       WEBAPP_WORKSPACE_ROOT: /app/workspace
       WEBAPP_PLUGINS_ROOT: /app/plugins
@@ -51,8 +56,8 @@ services:
   # one origin. This is the container users actually open in a browser.
   webfront:
     build:
-      context: .
-      dockerfile: ./webfront.Dockerfile
+      context: ..
+      dockerfile: docker/webfront.Dockerfile
     ports:
       - "8000:80"
     depends_on:

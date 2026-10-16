@@ -287,6 +287,18 @@ export function createAssistantPanel({
     return bubble;
   }
 
+  chatInput.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (!chatForm.querySelector('button[type="submit"]').disabled) {
+      chatForm.requestSubmit();
+    }
+  });
+
   chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 

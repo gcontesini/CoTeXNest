@@ -117,6 +117,51 @@ class ProjectSyncResult(BaseModel):
     changed_files: list[str] = Field(default_factory=list)
 
 
+# ─── Git settings (remote, credentials, branches) ───
+
+
+class GitInfo(BaseModel):
+    """Repository state shown in Settings > Git.
+
+    ``remote_url`` never carries credentials: any embedded
+    ``user:token@`` is stripped, and the token itself is never returned
+    by any endpoint -- only whether one is stored.
+    """
+
+    remote_url: str | None = None
+    has_credentials: bool = False
+    credential_username: str | None = None
+    branch: str | None = None
+    remote_branch_exists: bool = False
+    ahead: int = 0
+    behind: int = 0
+
+
+class GitRemoteSet(BaseModel):
+    url: str = Field(min_length=1, max_length=500)
+
+
+class GitCredentialsSet(BaseModel):
+    username: str = Field(min_length=1, max_length=120, pattern=r"^\S+$")
+    token: str = Field(min_length=1, max_length=500, pattern=r"^\S+$")
+
+
+class GitActionResult(BaseModel):
+    message: str
+    info: GitInfo
+
+
+class GitBranches(BaseModel):
+    current: str | None = None
+    local: list[str] = Field(default_factory=list)
+    remote_only: list[str] = Field(default_factory=list)
+
+
+class GitBranchSwitch(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    create: bool = False
+
+
 class DiffEntry(BaseModel):
     file_path: str
     status: str  # "added" | "modified" | "deleted"

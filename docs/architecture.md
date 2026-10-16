@@ -28,10 +28,10 @@ is no bundler step either way.
 ```
 webapp/
   pyproject.toml, justfile, README.md
-  Dockerfile                 # "backend" image: FastAPI + TeX Live + git
-  webfront.Dockerfile        # "webfront" image: nginx, static files + /api proxy
-  nginx.conf                 # webfront's routing (see "Deployment model")
-  docker-compose.yml         # wires backend + webfront together
+  docker/Dockerfile          # "backend" image: FastAPI + TeX Live + git
+  docker/webfront.Dockerfile # "webfront" image: nginx, static files + /api proxy
+  docker/nginx.conf          # webfront's routing (see "Deployment model")
+  docker/docker-compose.yml  # wires backend + webfront together
   src/webapp/
     main.py                   # FastAPI app wiring
     config.py                 # paths: WORKSPACE_ROOT, PLUGINS_ROOT, CATALOG_PATH, etc.
@@ -58,7 +58,7 @@ from the repository at any time.
 
 ## Deployment model
 
-`docker compose up --build` builds and starts two containers:
+`just up` (`docker compose -f docker/docker-compose.yml up --build`) builds and starts two containers:
 
 - **`webfront`** — nginx, serving `static/` and reverse-proxying
   `/api/*` and `/healthz` to `backend`. This is the container exposed
@@ -69,7 +69,7 @@ from the repository at any time.
   at `http://localhost:8001`, for debugging the API without going
   through the proxy.
 
-The browser only ever talks to `webfront`; `nginx.conf` is what makes
+The browser only ever talks to `webfront`; `docker/nginx.conf` is what makes
 the split invisible to the frontend code, which still issues same-origin
 `/api/...` requests exactly as it would against a single process.
 
@@ -82,7 +82,7 @@ the split invisible to the frontend code, which still issues same-origin
 
 Because both directories are bind mounts rather than named volumes
 internal to the container, project files and installed packages survive
-a container rebuild (`docker compose up --build` again) without any
+a container rebuild (`just up` again) without any
 export/import step. Rebuilding either image replaces that container's
 code; it does not touch `./workspace` or `./plugins` on the host.
 `webfront` depends on `backend` passing its `/healthz` check before it
@@ -112,7 +112,8 @@ carry any meaning outside the browser session that set them, and none
 of them are something a second person opening the same project would
 expect to inherit:
 
-- The "author name" shown on saved versions (`static/js/app.js`).
+- The "author name" shown on saved versions, editable in Settings > Git
+  (`AUTHOR_NAME_STORAGE_KEY` in `static/js/settings-modal.js`).
 - Appearance settings from the Settings dialog -- theme, application
   font/size, editor syntax color scheme, indentation size, and the
   highlight-current-line/highlight-matching-brackets toggles (all in

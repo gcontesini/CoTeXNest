@@ -31,7 +31,7 @@ From top to bottom, the window is:
 | Save As... | Prompts for a new project-relative path, saves the editor's current content there, and opens it. The original file is left untouched. |
 | Export PDF | Downloads the project's most recently compiled PDF. Requires at least one successful compile first. |
 | Close Project | Clears the editor, preview, and file browser without deleting anything -- just closes the working session. |
-| Quit | This is a browser tab, not a desktop app: there's no in-browser action that can stop the server. This shows a short reminder to run `just down` (or `docker compose down`) from a terminal, and that it's safe to just close the tab -- the server keeps running until you do. |
+| Quit | This is a browser tab, not a desktop app: there's no in-browser action that can stop the server. This shows a short reminder to run `just down` (or `docker compose -f docker/docker-compose.yml down`) from a terminal, and that it's safe to just close the tab -- the server keeps running until you do. |
 
 ### Help menu
 
@@ -88,3 +88,24 @@ Shows the character, word, and line count of whatever file is
 currently open in the editor, updated live as you type (word count
 splits on whitespace; an empty file counts as zero characters, words,
 and lines).
+
+## Settings > Git
+
+Acts on the open project's repository (backend: `services/git_remote.py`,
+routes under `/api/projects/{id}/git`).
+
+- **Repository**: the `origin` remote URL (`https://`, `ssh://` or
+  `user@host:path` forms only) with the branch and ahead/behind counts as of
+  the last fetch.
+- **Identity**: the author name used for saved versions (per browser).
+- **Credentials**: username and personal access token for an `https://`
+  remote. The token is stored as plain text in the project's `.git/config`
+  inside the workspace volume and is never returned by the API. Changing the
+  URL to another host removes the stored credentials. Use a token limited to
+  one repository.
+- **Branch**: switch to a local branch, track a fetched remote-only branch, or
+  create a branch from the current one. Requires no uncommitted changes to
+  tracked files.
+- **Remote actions**: Fetch, Pull (rebase onto `origin/<branch>`, aborted
+  cleanly on conflict) and Push (sets upstream). Pull and Push do not commit;
+  use Sync Changes for the commit, rebase, push sequence.

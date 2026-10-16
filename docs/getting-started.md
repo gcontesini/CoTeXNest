@@ -20,7 +20,7 @@ verified on your platform versus best-effort.
 From the `webapp/` directory:
 
 ```bash
-docker compose up --build
+docker compose -f docker/docker-compose.yml up --build
 ```
 
 This builds two images — `backend` (TeX Live, Python dependencies, and

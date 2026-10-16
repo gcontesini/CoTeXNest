@@ -30,3 +30,5 @@ __pycache__/
 # clone/fetch/push never gets refused over a bind-mount ownership
 # mismatch. Local, environment-specific, not source.
 /.gitconfig-webapp
+
+workspace/*

@@ -3,7 +3,7 @@ propose/apply flow that lets it edit project files.
 
 Provider abstraction: "local" calls a self-hosted Ollama server
 (``config.OLLAMA_BASE_URL``, a different container in the Docker
-deployment -- see docker-compose.yml); "external" calls a
+deployment -- see docker/docker-compose.yml); "external" calls a
 user-configured Anthropic- or OpenAI-compatible HTTP API using a
 user-supplied API key. Either way, the rest of this module only ever
 calls ``generate_completion()`` and does not know which provider
@@ -549,6 +549,20 @@ class ProviderRateLimitedError(ConnectionError):
     """
 
 
+class ProviderUnavailableError(ProviderRateLimitedError):
+    """An external provider is overloaded or unreachable (HTTP 500/502/503/504,
+    timeout or connection failure).
+
+    A subclass of ``ProviderRateLimitedError`` so the existing failover
+    path treats it the same way, but retried first with backoff since
+    these are usually transient.
+    """
+
+
+_TRANSIENT_STATUS_CODES: frozenset[int] = frozenset({500, 502, 503, 504})
+_TRANSIENT_RETRY_DELAYS_SECONDS: tuple[float, ...] = (2.0, 5.0)
+
+
 def _extract_provider_error_detail(response: httpx.Response) -> str | None:
     """Pull the provider's own error message out of its response body.
 
@@ -626,9 +640,13 @@ def _external_provider_error(error: httpx.HTTPError) -> ConnectionError:
 
         if status_code == 429:
             return ProviderRateLimitedError(message)
+        if status_code in _TRANSIENT_STATUS_CODES:
+            return ProviderUnavailableError(message)
         return ConnectionError(message)
 
-    return ConnectionError(f"could not reach the external provider: {error}")
+    return ProviderUnavailableError(
+        f"could not reach the external provider: {error}"
+    )
 
 
 def _call_external_openai(
@@ -753,10 +771,37 @@ def _external_candidate_from_primary(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _call_candidate_with_retry(
+    candidate: dict[str, Any],
+    model: str,
+    base_url: str,
+    api_key: str,
+    messages: list[dict[str, str]],
+) -> str:
+    """Call one provider, retrying transient (5xx/network) errors with backoff.
+
+    A 429 is not retried here: it fails over immediately.
+    """
+    call = (
+        _call_external_openai
+        if candidate["provider_kind"] == "openai"
+        else _call_external_anthropic
+    )
+
+    for delay in _TRANSIENT_RETRY_DELAYS_SECONDS:
+        try:
+            return call(messages, model, base_url, api_key)
+        except ProviderUnavailableError as error:
+            logger.warning("transient provider error, retrying in %ss: %s", delay, error)
+            time.sleep(delay)
+
+    return call(messages, model, base_url, api_key)
+
+
 def _generate_external_with_failover(
     messages: list[dict[str, str]], raw: dict[str, Any]
 ) -> tuple[str, str | None]:
-    """Call the active external provider, auto-promoting a fallback on 429.
+    """Call the active external provider, auto-promoting a fallback on 429 or transient 5xx.
 
     Tries the primary external provider first, then each configured
     fallback in order, stopping at the first one that doesn't come
@@ -806,11 +851,11 @@ def _generate_external_with_failover(
                 )
             continue  # an incompletely-configured fallback is just skipped
 
+        if str(model).startswith("REPLACE_"):
+            continue
+
         try:
-            if candidate["provider_kind"] == "openai":
-                reply = _call_external_openai(messages, model, base_url, api_key)
-            else:
-                reply = _call_external_anthropic(messages, model, base_url, api_key)
+            reply = _call_candidate_with_retry(candidate, model, base_url, api_key, messages)
         except ProviderRateLimitedError as error:
             last_error = error
             continue

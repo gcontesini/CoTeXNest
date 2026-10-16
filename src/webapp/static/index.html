@@ -69,6 +69,15 @@
         </ul>
       </div>
       <div class="menubar-item">
+        <button class="menubar-trigger" id="menu-view-trigger" type="button" aria-haspopup="true" aria-expanded="false">View</button>
+        <ul class="menubar-dropdown hidden" id="menu-view-dropdown" role="menu">
+          <li role="none"><button class="menubar-dropdown-item" id="menu-view-sidebar" data-view-toggle="sidebar" type="button" role="menuitemcheckbox" aria-checked="true">File Panel</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-view-editor" data-view-toggle="editor" type="button" role="menuitemcheckbox" aria-checked="true">TeX Editor</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-view-preview" data-view-toggle="preview" type="button" role="menuitemcheckbox" aria-checked="true">Preview</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-view-assistant" data-view-toggle="assistant" type="button" role="menuitemcheckbox" aria-checked="false">AI Assistant</button></li>
+        </ul>
+      </div>
+      <div class="menubar-item">
         <button class="menubar-trigger" id="menu-packages-trigger" type="button">Packages</button>
       </div>
       <div class="menubar-item">
@@ -105,10 +114,12 @@
     <!-- ─── Main area: sidebar + split workspace ─── -->
     <div class="layout">
 
+      <button class="sidebar-reopen-bar hidden" id="sidebar-reopen-bar" type="button" title="Open file panel" aria-label="Open file panel">▶</button>
+
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-header">
           <span>Files</span>
-          <button class="btn btn-icon" id="btn-collapse-sidebar" type="button" title="Collapse sidebar">⟨⟨</button>
+          <button class="btn btn-icon" id="btn-collapse-sidebar" type="button" title="Collapse sidebar">◀</button>
         </div>
         <div class="sidebar-toolbar hidden" id="file-search-row">
           <input id="file-search" type="text" placeholder="Search files…" aria-label="Search files" />
@@ -124,6 +135,8 @@
           <p class="empty-state">No project loaded yet.</p>
         </div>
       </aside>
+
+      <div class="sidebar-resizer" id="sidebar-resizer" title="Drag to resize"></div>
 
       <main class="workspace">
         <section class="pane editor-pane" id="editor-pane">
@@ -172,7 +185,7 @@
           </p>
         </div>
         <form class="assistant-chat-form" id="assistant-chat-form">
-          <textarea id="assistant-chat-input" placeholder="Ask the assistant…" rows="2"></textarea>
+          <textarea id="assistant-chat-input" placeholder="Ask the assistant… (Enter to send, Shift+Enter for a new line)" rows="2"></textarea>
           <button class="btn btn-primary" type="submit">Send</button>
         </form>
       </div>
@@ -314,6 +327,7 @@
         <button class="settings-nav-item" type="button" data-category="editor">Editor</button>
         <button class="settings-nav-item" type="button" data-category="assistant">AI Assistant</button>
         <button class="settings-nav-item" type="button" data-category="dictionary">Dictionary</button>
+        <button class="settings-nav-item" type="button" data-category="git">Git</button>
       </nav>
       <div class="settings-content">
         <div class="settings-dialog-header">

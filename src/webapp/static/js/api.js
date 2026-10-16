@@ -246,6 +246,48 @@ export async function revertTo(projectId, commitId, author) {
   );
 }
 
+// ─── Git settings (remote, credentials, branches) ───
+
+function gitUrl(projectId, suffix) {
+  return `/api/projects/${encodeURIComponent(projectId)}/git${suffix}`;
+}
+
+export async function getGitInfo(projectId) {
+  return request("GET", gitUrl(projectId, ""));
+}
+
+export async function setGitRemote(projectId, url) {
+  return request("PUT", gitUrl(projectId, "/remote"), { url });
+}
+
+export async function setGitCredentials(projectId, username, token) {
+  return request("PUT", gitUrl(projectId, "/credentials"), { username, token });
+}
+
+export async function clearGitCredentials(projectId) {
+  return request("DELETE", gitUrl(projectId, "/credentials"));
+}
+
+export async function gitFetch(projectId) {
+  return request("POST", gitUrl(projectId, "/fetch"));
+}
+
+export async function gitPull(projectId) {
+  return request("POST", gitUrl(projectId, "/pull"));
+}
+
+export async function gitPush(projectId) {
+  return request("POST", gitUrl(projectId, "/push"));
+}
+
+export async function listGitBranches(projectId) {
+  return request("GET", gitUrl(projectId, "/branches"));
+}
+
+export async function switchGitBranch(projectId, name, create = false) {
+  return request("POST", gitUrl(projectId, "/branch"), { name, create });
+}
+
 // ─── LaTeX package manager ───
 
 export async function searchCatalog(query, kind) {

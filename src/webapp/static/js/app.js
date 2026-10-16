@@ -44,6 +44,7 @@ import {
   applyAppearanceSettings,
   getEditorSettings,
   createSettingsModal,
+  AUTHOR_NAME_STORAGE_KEY,
 } from "./settings-modal.js";
 
 // Applied as early as possible (before the project list even loads)
@@ -113,10 +114,10 @@ const assistantDock = document.getElementById("assistant-dock");
 const btnCloseAssistant = document.getElementById("btn-close-assistant");
 const btnMinimizeAssistant = document.getElementById("btn-minimize-assistant");
 const btnMaximizeAssistant = document.getElementById("btn-maximize-assistant");
-const tabAssistantChat = document.getElementById("tab-assistant-chat");
-const tabAssistantSettings = document.getElementById("tab-assistant-settings");
-const assistantChatView = document.getElementById("assistant-chat-view");
-const assistantSettingsView = document.getElementById("assistant-settings-view");
+// Owned by the Settings dialog (Settings → AI Assistant); detached
+// until that category is opened.
+const assistantSettingsView = document.createElement("div");
+assistantSettingsView.className = "assistant-settings-host";
 const assistantChatLog = document.getElementById("assistant-chat-log");
 const assistantChatForm = document.getElementById("assistant-chat-form");
 const assistantChatInput = document.getElementById("assistant-chat-input");
@@ -157,8 +158,6 @@ let currentProjectId = null;
 let currentFilePath = null;
 let editor = null;
 
-const AUTHOR_NAME_STORAGE_KEY = "latex-writer:author-name";
-
 // ─── Toasts ───
 
 const TOAST_DISMISS_MS = 20000;
@@ -198,6 +197,7 @@ function notify(message, kind = "info") {
 
 const MENU_SPECS = [
   { itemId: "menu-file-trigger", dropdownId: "menu-file-dropdown" },
+  { itemId: "menu-view-trigger", dropdownId: "menu-view-dropdown" },
   { itemId: "menu-help-trigger", dropdownId: "menu-help-dropdown" },
 ];
 
@@ -217,6 +217,7 @@ function closeAllMenus() {
 
 function openMenu(menu) {
   closeAllMenus();
+  updateViewMenuChecks();
   menu.dropdown.classList.remove("hidden");
   menu.container.classList.add("open");
   menu.trigger.setAttribute("aria-expanded", "true");
@@ -307,39 +308,24 @@ async function handleAssistantProposalApplied(proposal) {
   }
 }
 
-function showAssistantTab(tab) {
-  const isChat = tab === "chat";
-  tabAssistantChat.classList.toggle("active", isChat);
-  tabAssistantSettings.classList.toggle("active", !isChat);
-  assistantChatView.classList.toggle("hidden", !isChat);
-  assistantSettingsView.classList.toggle("hidden", isChat);
-
-  if (!isChat) {
-    assistantPanel.refreshSettings();
-  }
-}
-
 btnAssistant.addEventListener("click", () => {
   assistantDock.classList.toggle("hidden");
 });
 btnCloseAssistant.addEventListener("click", () => {
   assistantDock.classList.add("hidden");
 });
-tabAssistantChat.addEventListener("click", () => showAssistantTab("chat"));
-tabAssistantSettings.addEventListener("click", () => showAssistantTab("settings"));
 
-// ─── Settings dialog (General/Editor/AI Assistant/Dictionary) ───
+// ─── Settings dialog (General/Editor/AI Assistant/Dictionary/Git) ───
 
 const settingsModal = createSettingsModal({
   dialogEl: settingsDialog,
   bodyEl: settingsPanelBody,
   titleEl: settingsDialogTitle,
   getEditor: () => editor,
+  getProjectId: () => currentProjectId,
   notify,
-  onOpenAssistantSettings: () => {
-    assistantDock.classList.remove("hidden");
-    showAssistantTab("settings");
-  },
+  assistantSettingsEl: assistantSettingsView,
+  renderAssistantSettings: () => assistantPanel.refreshSettings(),
 });
 
 menuSettingsTrigger.addEventListener("click", () => settingsModal.open());
@@ -818,9 +804,51 @@ deleteProjectForm.addEventListener("submit", async (event) => {
   }
 });
 
-btnCollapseSidebar.addEventListener("click", () => {
-  sidebar.classList.toggle("collapsed");
-});
+const sidebarReopenBar = document.getElementById("sidebar-reopen-bar");
+const sidebarResizer = document.getElementById("sidebar-resizer");
+const SIDEBAR_MIN_WIDTH_PX = 160;
+const SIDEBAR_MAX_WIDTH_PX = 600;
+
+function setSidebarCollapsed(collapsed) {
+  sidebar.classList.toggle("collapsed", collapsed);
+  sidebarReopenBar.classList.toggle("hidden", !collapsed);
+  sidebarResizer.classList.toggle("hidden", collapsed);
+}
+
+btnCollapseSidebar.addEventListener("click", () => setSidebarCollapsed(true));
+sidebarReopenBar.addEventListener("click", () => setSidebarCollapsed(false));
+
+(function setUpSidebarResize() {
+  let isDragging = false;
+
+  sidebarResizer.addEventListener("mousedown", (event) => {
+    isDragging = true;
+    sidebarResizer.classList.add("dragging");
+    event.preventDefault();
+  });
+
+  window.addEventListener("mousemove", (event) => {
+    if (!isDragging) {
+      return;
+    }
+
+    const left = sidebar.getBoundingClientRect().left;
+    const width = Math.min(
+      SIDEBAR_MAX_WIDTH_PX,
+      Math.max(SIDEBAR_MIN_WIDTH_PX, event.clientX - left),
+    );
+    sidebar.style.transition = "none";
+    sidebar.style.width = `${width}px`;
+  });
+
+  window.addEventListener("mouseup", () => {
+    if (isDragging) {
+      isDragging = false;
+      sidebarResizer.classList.remove("dragging");
+      sidebar.style.transition = "";
+    }
+  });
+})();
 
 // ─── Status bar (char/word/line count) ───
 
@@ -985,7 +1013,6 @@ async function compileCurrentProject({ silent = false } = {}) {
       showCompileError(previewContainer, result.log, {
         onAskAssistant: (logText) => {
           assistantDock.classList.remove("hidden");
-          showAssistantTab("chat");
           assistantPanel.askAboutCompileError(logText);
         },
       });
@@ -1076,6 +1103,56 @@ btnCollapseEditorPane.addEventListener("click", () => {
 btnCollapsePreviewPane.addEventListener("click", () => {
   setPaneCollapsed(previewPane, editorPane, btnCollapsePreviewPane, "▶", "◀");
 });
+
+// ─── View menu (toggle panels) ───
+
+function setEditorPreviewVisible(which, visible) {
+  const [pane, other, button, collapsedIcon, expandedIcon] =
+    which === "editor"
+      ? [editorPane, previewPane, btnCollapseEditorPane, "◀", "▶"]
+      : [previewPane, editorPane, btnCollapsePreviewPane, "▶", "◀"];
+  const isVisible = !pane.classList.contains("collapsed");
+
+  if (visible === isVisible) {
+    return;
+  }
+
+  if (!visible && other.classList.contains("collapsed")) {
+    // Never leave both panes collapsed: reopen the other one first.
+    const otherButton = which === "editor" ? btnCollapsePreviewPane : btnCollapseEditorPane;
+    otherButton.click();
+  }
+
+  setPaneCollapsed(pane, other, button, collapsedIcon, expandedIcon);
+}
+
+const VIEW_TOGGLE_STATE = {
+  sidebar: () => !sidebar.classList.contains("collapsed"),
+  editor: () => !editorPane.classList.contains("collapsed"),
+  preview: () => !previewPane.classList.contains("collapsed"),
+  assistant: () => !assistantDock.classList.contains("hidden"),
+};
+
+function updateViewMenuChecks() {
+  for (const item of document.querySelectorAll("[data-view-toggle]")) {
+    item.setAttribute("aria-checked", String(VIEW_TOGGLE_STATE[item.dataset.viewToggle]()));
+  }
+}
+
+for (const item of document.querySelectorAll("[data-view-toggle]")) {
+  item.addEventListener("click", () => {
+    const target = item.dataset.viewToggle;
+    const shouldShow = !VIEW_TOGGLE_STATE[target]();
+
+    if (target === "sidebar") {
+      setSidebarCollapsed(!shouldShow);
+    } else if (target === "assistant") {
+      assistantDock.classList.toggle("hidden", !shouldShow);
+    } else {
+      setEditorPreviewVisible(target, shouldShow);
+    }
+  });
+}
 
 // ─── Resizable editor/preview divider ───
 

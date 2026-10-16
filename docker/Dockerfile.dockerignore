@@ -5,3 +5,4 @@ workspace/
 plugins/
 .git
 tests/
+assistant_config/
