@@ -32,6 +32,7 @@ from .. import config
 from ..models import CompileResult
 
 _LOG_TAIL_CHARS: int = 20_000
+_LATEXMK_SKIPPED_MARKER: str = "Nothing to do"
 
 
 def _validate_main_file(main_file_: str) -> str:
@@ -182,6 +183,22 @@ def compile_project(
             env=compile_env,
             check=False,  # non-zero exit is a normal, inspected outcome below
         )
+
+        # latexmk records a failed run in main.fdb_latexmk and then reports
+        # "Nothing to do" for unchanged sources, hiding the real LaTeX error.
+        # Rerun with -g (force a full rebuild) so the log shows that error.
+        if completed.returncode != 0 and _LATEXMK_SKIPPED_MARKER in (
+            completed.stdout + completed.stderr
+        ):
+            completed = subprocess.run(
+                command[:1] + ["-g"] + command[1:],
+                cwd=project_dir,
+                capture_output=True,
+                text=True,
+                timeout=config.COMPILE_TIMEOUT_SECONDS,
+                env=compile_env,
+                check=False,
+            )
     except subprocess.TimeoutExpired as timeout_error:
         duration_ms: int = int((time.monotonic() - start_time) * 1000.0)
         partial_log: str = (

@@ -296,3 +296,19 @@ def test_compile_router_rejects_flag_like_main_file_with_400(
     )
 
     assert response.status_code == 400
+
+
+@pytest.mark.skipif(_LATEXMK_MISSING, reason="latexmk not installed")
+def test_compile_project_repeated_failure_keeps_real_error(
+    workspace_root: Path,
+) -> None:
+    """A second compile of an unchanged broken file still shows the error."""
+    _write_project(workspace_root, "proj-repeat", _BROKEN_TEX)
+
+    first: CompileResult = latex_render.compile_project("proj-repeat")
+    second: CompileResult = latex_render.compile_project("proj-repeat")
+
+    assert first.success is False
+    assert second.success is False
+    assert "Nothing to do" not in second.log
+    assert "Undefined control sequence" in second.log
