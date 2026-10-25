@@ -33,7 +33,7 @@ The app is served at `http://localhost:8000`. Under Docker `just up` starts thre
 
 See `docs/architecture.md`.
 
-The AI assistant has no default model or API key. Open Assistant Settings → AI Assistant and either pull a local model by pasting a tag from [ollama.com/library](https://ollama.com/library) (for example `qwen2.5-coder:3b`) or add an external provider API key. See `docs/ai-assistant.md`.
+The AI assistant defaults to the Ollama cloud model `gemma4:31b-cloud`, which needs a one-time `ollama signin` in the `ai-assistant` container (see `docs/ai-assistant.md`), and has no API key. Open Settings → AI Assistant to pull a different model by pasting a tag from [ollama.com/library](https://ollama.com/library) (for example `qwen2.5-coder:3b`) or to add an external provider API key. See `docs/ai-assistant.md`.
 
 Further documentation is in `docs/`. The same files build as a Sphinx site with `just docs-build` (output in `docs/_build/html/`) and are published to GitHub Pages on every push to `main`. See `docs/index.md`.
 

@@ -39,6 +39,7 @@ From top to bottom, the window is:
 |---|---|
 | Documentation | Opens this documentation site, once it is published (see "Building these docs" in [index.md](index.md)). |
 | Template Examples | Opens the Packages panel, which lists the available starter templates alongside installable packages. |
+| Shortcuts | Lists the editor and application keyboard shortcuts, followed by your own custom commands (name, arguments, and the `%` comment on the definition line). |
 
 ## File browser (sidebar)
 
@@ -88,6 +89,24 @@ Shows the character, word, and line count of whatever file is
 currently open in the editor, updated live as you type (word count
 splits on whitespace; an empty file counts as zero characters, words,
 and lines).
+
+## Settings > Custom Commands
+
+A text area holding LaTeX definitions (`\newcommand`, `\renewcommand`,
+`\providecommand`, `\DeclareMathOperator`, or any other preamble code),
+stored verbatim in `assistant_config/custom_commands.tex`. Nothing is
+validated: an invalid command shows up as a compile error.
+
+The "Load custom commands in this project" checkbox adds the line
+`\input{custom-commands.tex} % latex-studio:custom-commands` before
+`\begin{document}` in the project's main file and writes a copy of the
+commands to `custom-commands.tex` in the project. Unchecking removes both.
+The line itself is the on/off state, so deleting it in the editor turns
+the commands off too. Saving the commands refreshes the copy in every
+project that has the line. Packages the commands need (for example
+`tikz` or `pdfcomment`) must be loaded in the project's preamble before
+that line. Backend: `services/custom_commands.py`,
+`routers/custom_commands.py`.
 
 ## Settings > Git
 

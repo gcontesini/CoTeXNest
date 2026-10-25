@@ -1460,3 +1460,43 @@ dialog::backdrop {
   letter-spacing: 0.04em;
   color: var(--color-text-muted);
 }
+
+.custom-commands-input {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  width: 100%;
+  resize: vertical;
+}
+
+.shortcuts-dialog {
+  width: min(640px, 92vw);
+  max-height: 80vh;
+  padding: 0;
+}
+
+.shortcuts-body {
+  padding: var(--space-4);
+  overflow-y: auto;
+}
+
+.shortcuts-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.shortcuts-table td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: top;
+}
+
+.shortcut-keys {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.shortcut-command {
+  white-space: normal;
+  word-break: break-all;
+}

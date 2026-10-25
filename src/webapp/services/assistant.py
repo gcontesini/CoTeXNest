@@ -63,14 +63,14 @@ from . import git_history, project_files
 
 logger = logging.getLogger(__name__)
 
-# Deliberately NOT auto-selected anywhere -- shipping a default would
-# mean every fresh deployment silently pulls a multi-gigabyte model the
-# user never asked for. Only used as a suggestion string in docs/UI
-# copy. Live testing showed sub-1B models (llama3.2:1b, qwen2.5:0.5b,
+# Default model for a fresh deployment: an Ollama cloud model, so
+# nothing large is downloaded -- inference runs on ollama.com and needs
+# the Ollama server to be signed in (docs/ai-assistant.md). Earlier live
+# testing showed sub-1B models (llama3.2:1b, qwen2.5:0.5b,
 # gemma3:1b) almost never produce a usable fix-compile-error proposal,
 # while a code-tuned ~3B model succeeds close to consistently -- see "A
 # note on model capability" in docs/ai-assistant.md.
-_SUGGESTED_LOCAL_MODEL = "qwen2.5-coder:3b"
+DEFAULT_LOCAL_MODEL = "gemma4:31b-cloud"
 _MODEL_PULL_TIMEOUT_SECONDS = 600
 
 # A proposal's content can legitimately be a full LaTeX document, so
@@ -133,11 +133,7 @@ _JSON_PROPOSAL_INSTRUCTIONS = (
 def _default_config_dict() -> dict[str, Any]:
     return {
         "provider": "local",
-        # No default: a fresh deployment must not silently pull a
-        # multi-gigabyte model. The user must explicitly name one
-        # (Settings tab, or PUT /api/assistant/config) or switch to an
-        # external API key before the assistant does anything.
-        "local_model": None,
+        "local_model": DEFAULT_LOCAL_MODEL,
         "external_provider_kind": "anthropic",
         "external_base_url": None,
         "external_model": None,

@@ -129,11 +129,9 @@ def _fake_pull_stream(lines: list[str] | None = None):
 
 
 def test_get_config_defaults() -> None:
-    # No model is auto-selected -- a fresh deployment must not silently
-    # pull a multi-gigabyte model before the user has chosen one.
     cfg = assistant.get_config()
     assert cfg.provider == "local"
-    assert cfg.local_model is None
+    assert cfg.local_model == assistant.DEFAULT_LOCAL_MODEL == "gemma4:31b-cloud"
     assert cfg.has_external_api_key is False
     assert cfg.writing_style_profile is None
     assert cfg.fallback_profiles == []
@@ -182,10 +180,10 @@ def test_update_config_rejects_invalid_provider_kind() -> None:
 
 
 def test_generate_completion_local_requires_a_configured_model() -> None:
-    # No model is auto-selected on a fresh deployment -- this must
-    # raise a clear, actionable error rather than silently picking one
-    # (and definitely rather than silently pulling a multi-gigabyte
-    # default).
+    # A user who clears the model field must get a clear, actionable
+    # error rather than a silent fallback to the default.
+    assistant.update_config(AssistantConfigUpdate(local_model=""))
+
     with pytest.raises(ValueError, match="no local model is configured"):
         assistant.generate_completion([{"role": "user", "content": "hi"}])
 
@@ -1443,6 +1441,8 @@ def test_router_fallback_profile_crud() -> None:
 
 
 def test_router_list_models_local_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    assistant.update_config(AssistantConfigUpdate(local_model=""))
+
     def fake_get(url: str, timeout: float) -> _FakeResponse:
         return _FakeResponse({"models": [{"name": "llama3.2:1b"}, {"name": "mistral"}]})
 

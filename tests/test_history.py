@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from webapp import config
+from webapp.models import AssistantConfigUpdate
 from webapp.routers import history as history_router
 from webapp.services import assistant, git_history
 
@@ -531,6 +532,7 @@ def test_router_sync_dirty_without_message_and_no_assistant_returns_needs_messag
 ) -> None:
     _remote_path, project_path, _branch = remote_and_project
     (project_path / "main.tex").write_text("local edit\n", encoding="utf-8")
+    assistant.update_config(AssistantConfigUpdate(local_model=""))
 
     client: TestClient = _make_client()
     response = client.post(

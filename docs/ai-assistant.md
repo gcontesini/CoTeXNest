@@ -29,16 +29,21 @@ make an earlier version of the project disappear.
 Open the Assistant panel's **Settings** tab to choose:
 
 - **Local (Ollama)** -- talks to the `ai-assistant` container
-  (`config.OLLAMA_BASE_URL`). No model is auto-selected: a fresh
-  deployment doesn't pull anything until you type or pick a model tag
-  (paste one exactly as shown on
-  [ollama.com/library](https://ollama.com/library), e.g.
+  (`config.OLLAMA_BASE_URL`). The default model is `gemma4:31b-cloud`
+  (`assistant.DEFAULT_LOCAL_MODEL`), an Ollama cloud model: it runs on
+  ollama.com, so nothing large is downloaded, but the Ollama server
+  must be signed in. Per the
+  [Ollama cloud docs](https://docs.ollama.com/cloud), cloud models need
+  a signed-in Ollama; run `docker compose -f docker/docker-compose.yml
+  exec ai-assistant ollama signin` once and follow the printed link.
+  Prompts and responses are processed by Ollama's cloud, so this is not
+  an offline setup. Whether the sign-in survives a container rebuild
+  has not been verified. To run fully locally, paste a tag exactly as
+  shown on [ollama.com/library](https://ollama.com/library) (e.g.
   `qwen2.5-coder:3b`) and click **Pull model**. A progress bar shows
   Ollama's own download status plus a byte-count/ETA, and a toast
-  confirms the moment it's ready. Trying to chat before a model is
-  configured returns a clear "no local model is configured yet" error
-  instead of silently downloading one -- a multi-gigabyte default
-  isn't something a fresh deployment should ship with.
+  confirms the moment it's ready. Clearing the model field makes chat
+  return a "no local model is configured yet" error.
 - **External API** -- Anthropic's native Messages API, or any
   OpenAI-compatible Chat Completions API, plus your own model name and
   API key. The "Provider" dropdown offers convenience presets

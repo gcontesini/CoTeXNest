@@ -46,6 +46,7 @@ import {
   createSettingsModal,
   AUTHOR_NAME_STORAGE_KEY,
 } from "./settings-modal.js";
+import { createShortcutsDialog } from "./shortcuts-dialog.js";
 
 // Applied as early as possible (before the project list even loads)
 // to avoid a flash of the wrong theme/font on page load.
@@ -326,7 +327,27 @@ const settingsModal = createSettingsModal({
   notify,
   assistantSettingsEl: assistantSettingsView,
   renderAssistantSettings: () => assistantPanel.refreshSettings(),
+  onProjectFilesChanged: (paths) => handleProjectFilesChanged(paths),
 });
+
+/**
+ * Settings changed files on disk (the custom-commands toggle and
+ * save), not through the editor: refresh the tree and reload the open
+ * file if it was one of them.
+ *
+ * @param {string[]} paths - Project-relative paths that changed.
+ */
+async function handleProjectFilesChanged(paths) {
+  if (!currentProjectId) {
+    return;
+  }
+
+  await fileTree.load(currentProjectId);
+
+  if (currentFilePath && paths.includes(currentFilePath)) {
+    await openFile(currentFilePath);
+  }
+}
 
 menuSettingsTrigger.addEventListener("click", () => settingsModal.open());
 btnCloseSettings.addEventListener("click", () => settingsDialog.close());
@@ -1333,6 +1354,16 @@ document.getElementById("menu-help-docs").addEventListener("click", () => {
 
 document.getElementById("menu-help-templates").addEventListener("click", () => {
   openPackagesPanel();
+});
+
+const shortcutsDialog = createShortcutsDialog({
+  dialogEl: document.getElementById("shortcuts-dialog"),
+  bodyEl: document.getElementById("shortcuts-body"),
+  closeButtonEl: document.getElementById("btn-close-shortcuts"),
+});
+
+document.getElementById("menu-help-shortcuts").addEventListener("click", () => {
+  shortcutsDialog.open();
 });
 
 // ─── Boot ───

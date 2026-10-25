@@ -438,7 +438,7 @@ export function createAssistantPanel({
     const localModelInput = document.createElement("input");
     localModelInput.type = "text";
     localModelInput.value = cfg.local_model ?? "";
-    localModelInput.placeholder = "e.g. qwen2.5-coder:3b";
+    localModelInput.placeholder = "e.g. gemma4:31b";
     localModelInput.setAttribute("list", "assistant-local-model-options");
     const modelDatalist = document.createElement("datalist");
     modelDatalist.id = "assistant-local-model-options";

@@ -39,6 +39,10 @@ import {
   gitPush,
   listGitBranches,
   switchGitBranch,
+  getCustomCommands,
+  saveCustomCommands,
+  getProjectCustomCommands,
+  setProjectCustomCommands,
 } from "./api.js";
 
 // Shared with app.js, which prompts for the name on first commit; the
@@ -172,6 +176,7 @@ export function createSettingsModal({
   notify,
   renderAssistantSettings,
   assistantSettingsEl,
+  onProjectFilesChanged = async () => {},
 }) {
   const navButtons = Array.from(dialogEl.querySelectorAll(".settings-nav-item"));
   let activeCategory = "general";
@@ -448,6 +453,104 @@ export function createSettingsModal({
 
   // ─── Git (remote, identity, credentials, branches, fetch/pull/push) ───
 
+  async function renderCustomCommands() {
+    bodyEl.replaceChildren();
+
+    const commandsSection = createElement("div", "settings-section");
+    commandsSection.appendChild(createElement("h3", null, "Custom commands"));
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "custom-commands-input";
+    textarea.rows = 14;
+    textarea.spellcheck = false;
+    textarea.placeholder = "\\newcommand{\\R}{\\mathbb{R}} % Real numbers symbol";
+
+    try {
+      textarea.value = (await getCustomCommands()).content;
+    } catch (error) {
+      notify(`Could not load custom commands: ${error.message}`, "error");
+    }
+
+    commandsSection.appendChild(textarea);
+    commandsSection.appendChild(
+      createElement(
+        "p",
+        "package-note",
+        "LaTeX definitions shared by every project that loads them. " +
+          "Nothing here is validated: an invalid command shows up as a " +
+          "compile error, so check it before relying on it.",
+      ),
+    );
+
+    const saveButton = createElement("button", "btn btn-primary", "Save custom commands");
+    saveButton.type = "button";
+    saveButton.addEventListener("click", async () => {
+      try {
+        getEditor()?.flush();
+        await saveCustomCommands(textarea.value);
+        await onProjectFilesChanged(["custom-commands.tex"]);
+        notify("Custom commands saved.", "success");
+      } catch (error) {
+        notify(`Could not save custom commands: ${error.message}`, "error");
+      }
+    });
+    commandsSection.appendChild(saveButton);
+    bodyEl.appendChild(commandsSection);
+
+    const projectSection = createElement("div", "settings-section");
+    projectSection.appendChild(createElement("h3", null, "Current project"));
+
+    const projectId = getProjectId();
+
+    if (!projectId) {
+      projectSection.appendChild(
+        createElement("p", "package-note", "Open a project to load these commands in it."),
+      );
+      bodyEl.appendChild(projectSection);
+      return;
+    }
+
+    const toggleLabel = document.createElement("label");
+    const toggle = document.createElement("input");
+    toggle.type = "checkbox";
+    toggleLabel.append(toggle, " Load custom commands in this project");
+    projectSection.appendChild(toggleLabel);
+
+    const toggleNote = createElement("p", "package-note", "");
+    projectSection.appendChild(toggleNote);
+    bodyEl.appendChild(projectSection);
+
+    function describeToggle(enabled, mainFile) {
+      toggleNote.textContent = enabled
+        ? `${mainFile} has the line \\input{custom-commands.tex} before \\begin{document}. ` +
+          "Delete that line in the editor to turn this off by hand."
+        : `Turning this on adds \\input{custom-commands.tex} before \\begin{document} in ${mainFile}.`;
+    }
+
+    try {
+      const status = await getProjectCustomCommands(projectId);
+      toggle.checked = status.enabled;
+      describeToggle(status.enabled, status.main_file);
+    } catch (error) {
+      toggle.disabled = true;
+      toggleNote.textContent = `Could not read this project's status: ${error.message}`;
+    }
+
+    toggle.addEventListener("change", async () => {
+      const wanted = toggle.checked;
+
+      try {
+        getEditor()?.flush();
+        const status = await setProjectCustomCommands(projectId, wanted);
+        describeToggle(status.enabled, status.main_file);
+        await onProjectFilesChanged([status.main_file, "custom-commands.tex"]);
+      } catch (error) {
+        toggle.checked = !wanted;
+        notify(`Could not change custom commands: ${error.message}`, "error");
+      }
+    });
+  }
+
   function gitSection(title) {
     const section = createElement("div", "settings-section");
     section.appendChild(createElement("h3", null, title));
@@ -647,6 +750,7 @@ export function createSettingsModal({
     editor: { title: "Editor", render: renderEditor },
     assistant: { title: "AI Assistant", render: renderAssistant },
     dictionary: { title: "Dictionary", render: renderDictionary },
+    "custom-commands": { title: "Custom Commands", render: renderCustomCommands },
     git: { title: "Git", render: renderGit },
   };
 

@@ -71,6 +71,12 @@ ASSISTANT_CONFIG_ROOT: Path = Path(
 )
 ASSISTANT_CONFIG_PATH: Path = ASSISTANT_CONFIG_ROOT / "settings.json"
 
+# Global, user-authored LaTeX commands (Settings -> Custom Commands).
+# Lives next to the assistant settings in the same bind-mounted volume
+# so it can be read or edited without the app running; each project
+# that opts in gets a copy -- see services/custom_commands.py.
+CUSTOM_COMMANDS_PATH: Path = ASSISTANT_CONFIG_ROOT / "custom_commands.tex"
+
 # Base URL of the local Ollama server the AI assistant talks to when its
 # provider is "local". Defaults to Ollama's own default port on
 # localhost for "just dev"; docker/docker-compose.yml overrides this to the

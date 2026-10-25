@@ -443,3 +443,23 @@ export async function assistantApply(projectId, proposal, author) {
     { proposal, author: author ?? "AI assistant" },
   );
 }
+
+// ─── Custom commands ───
+
+export async function getCustomCommands() {
+  return request("GET", "/api/custom-commands");
+}
+
+export async function saveCustomCommands(content) {
+  return request("PUT", "/api/custom-commands", { content });
+}
+
+export async function getProjectCustomCommands(projectId) {
+  return request("GET", `/api/projects/${encodeURIComponent(projectId)}/custom-commands`);
+}
+
+export async function setProjectCustomCommands(projectId, enabled) {
+  return request("PUT", `/api/projects/${encodeURIComponent(projectId)}/custom-commands`, {
+    enabled,
+  });
+}

@@ -360,3 +360,16 @@ class AssistantChatJobStatus(BaseModel):
 class AssistantFixJobStatus(BaseModel):
     status: str  # "running" | "done"
     result: AiAssistResult | None = None
+
+
+class CustomCommands(BaseModel):
+    content: str = ""
+
+
+class CustomCommandsProjectStatus(BaseModel):
+    enabled: bool
+    main_file: str
+
+
+class CustomCommandsProjectUpdate(BaseModel):
+    enabled: bool

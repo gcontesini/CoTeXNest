@@ -88,6 +88,7 @@
         <ul class="menubar-dropdown hidden" id="menu-help-dropdown" role="menu">
           <li role="none"><button class="menubar-dropdown-item" id="menu-help-docs" type="button" role="menuitem">Documentation</button></li>
           <li role="none"><button class="menubar-dropdown-item" id="menu-help-templates" type="button" role="menuitem">Template Examples</button></li>
+          <li role="none"><button class="menubar-dropdown-item" id="menu-help-shortcuts" type="button" role="menuitem">Shortcuts</button></li>
         </ul>
       </div>
     </nav>
@@ -327,6 +328,7 @@
         <button class="settings-nav-item" type="button" data-category="editor">Editor</button>
         <button class="settings-nav-item" type="button" data-category="assistant">AI Assistant</button>
         <button class="settings-nav-item" type="button" data-category="dictionary">Dictionary</button>
+        <button class="settings-nav-item" type="button" data-category="custom-commands">Custom Commands</button>
         <button class="settings-nav-item" type="button" data-category="git">Git</button>
       </nav>
       <div class="settings-content">
@@ -337,6 +339,15 @@
         <div class="settings-panel-body" id="settings-panel-body"></div>
       </div>
     </div>
+  </dialog>
+
+  <!-- ─── Shortcuts dialog ─── -->
+  <dialog id="shortcuts-dialog" class="shortcuts-dialog">
+    <div class="settings-dialog-header">
+      <h2>Shortcuts</h2>
+      <button class="btn btn-icon" id="btn-close-shortcuts" type="button" title="Close">✕</button>
+    </div>
+    <div class="shortcuts-body" id="shortcuts-body"></div>
   </dialog>
 
   <!-- ─── Quit dialog ─── -->
